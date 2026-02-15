@@ -1,0 +1,25 @@
+# VM images
+*.qcow2
+*.img
+*.iso
+bzImage*
+
+# Models (on HuggingFace)
+modello_*/
+adattatore_ebpf_*/
+
+# Dataset corpus (on HuggingFace)
+shared_corpus/
+*.jsonl
+*.jsonl.gz
+
+# Python / Jupyter
+.pixi/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Misc
+*.pid
+*.log
+diagnostic_data/
