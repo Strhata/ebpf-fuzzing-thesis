@@ -206,7 +206,7 @@ def main():
     ap.add_argument("--vm-host",    default="localhost")
     ap.add_argument("--vm-port",    type=int, default=10022)
     ap.add_argument("--vm-user",    default="root")
-    ap.add_argument("--vm-key",     default=str(Path.home() / "fuzzing_lab/trixie.id_rsa"))
+    ap.add_argument("--vm-key",     default=str(Path(__file__).parent.parent / "fuzzing" / "trixie.id_rsa"))
     ap.add_argument("--output-dir", default="results/")
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--skip-vm",    action="store_true", help="Skip VM validation, only compile")

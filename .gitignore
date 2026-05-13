@@ -1,8 +1,17 @@
-# VM images
+# VM images and compiled kernels (arch-specific, built by make setup)
 *.qcow2
 *.img
 *.iso
 bzImage*
+fuzzing/bzImage*
+fuzzing/*.id_rsa
+fuzzing/*.id_rsa.pub
+fuzzing/trixie/
+data/corpus/buzzer
+data/corpus/ebpf_validator
+
+# Kernel source cache (downloaded by make build-kernel)
+build/
 
 # Models (on HuggingFace)
 modello_*/
@@ -21,6 +30,9 @@ checkpoints/*/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Scratch / planning docs
+.scratch/
 
 # Misc
 *.pid
