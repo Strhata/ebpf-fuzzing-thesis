@@ -31,6 +31,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# Local secrets
+.env
+
 # Scratch / planning docs
 .scratch/
 

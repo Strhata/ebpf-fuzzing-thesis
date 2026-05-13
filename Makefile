@@ -11,6 +11,10 @@
 REPO_ROOT   := $(shell git rev-parse --show-toplevel)
 PIXI        := pixi run
 
+# Load .env if present (keeps secrets out of shell history)
+-include $(REPO_ROOT)/.env
+export
+
 # Linux 6.8.0 source
 KERNEL_VER     := 6.8
 KERNEL_TARBALL := linux-$(KERNEL_VER).tar.xz
