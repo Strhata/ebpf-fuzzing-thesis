@@ -13,6 +13,9 @@ shared_corpus/
 *.jsonl
 *.jsonl.gz
 
+# Checkpoints (on HuggingFace)
+checkpoints/*/
+
 # Python / Jupyter
 .pixi/
 __pycache__/
