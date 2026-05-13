@@ -1,4 +1,4 @@
-# eBPF Fuzzing + LLM Fine-Tuning — Master Thesis
+# eBPF Fuzzing + LLM Fine-Tuning — Thesis
 
 Research project exploring LLM-guided eBPF program generation, evaluated via kernel verifier pass-rate and coverage-guided RL feedback.
 
