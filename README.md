@@ -1,43 +1,64 @@
 # eBPF Fuzzing + LLM Fine-Tuning — Thesis
 
-Research project exploring LLM-guided eBPF program generation, evaluated via kernel verifier pass-rate and coverage-guided RL feedback.
+Research project exploring LLM-guided eBPF program generation, evaluated via kernel verifier pass-rate.
+
+## What this is
+
+End-to-end pipeline:
+1. **Data collection** — modified [buzzer](https://github.com/google/buzzer) (Google's eBPF fuzzer) to dump generated programs + verifier outcomes as JSONL at the kernel FFI boundary. Collected ~2M entries via a Dockerized single-VM setup.
+2. **Dataset curation** — analyzed error class distribution, balanced to 27k samples (cap 2000/class) to avoid domination by top error category.
+3. **Fine-tuning** — QLoRA fine-tuned Qwen2.5-Coder-1.5B on verifier-log assembly format. Model learns to generate valid eBPF programs given a target status/error class.
+4. **Evaluation** — automated pipeline: generate → parse assembly → compile with clang BPF target → validate in kernel via `ebpf_validator` → pass-rate.
 
 ## Structure
 
 ```
-fuzzing/        # Infrastructure: QEMU VMs, Docker swarm, crash logs
-ml/             # Notebooks: corpus analysis, SFT training, RL loop
-tools/          # Pipeline scripts: crash classifier, pass-rate eval, kcov validator
-docs/           # Thesis notes and roadmap
+fuzzing/        # Buzzer fork (modified ffi.go for data extraction), VM scripts, Docker setup
+ml/             # Training script, dataset builder, notebooks
+tools/          # evaluate_passrate.py, ebpf_validator (Go), classify_crashes.py
+docs/           # Thesis notes, training log, roadmap
+data/           # Curated dataset (dataset_final_qwen.jsonl) — large files on HuggingFace
+checkpoints/    # Model adapters — large files on HuggingFace
 ```
 
 ## Models & Dataset
 
 | Artifact | Location |
 |---|---|
-| Final adapter (`adattatore_ebpf_v1`) | HuggingFace — link TBD |
-| Curated training corpus | HuggingFace — link TBD |
+| Phase 1 adapter (`sft_fase1/adattatore_ebpf_v1`) | HuggingFace — link TBD |
+| Curated training dataset (`dataset_final_qwen.jsonl`) | HuggingFace — link TBD |
 
-## Setup
+## Quickstart (new machine)
 
 ```bash
-# Build fuzzer Docker image
-docker build -t ebpffuzzer:v1 ./fuzzing
-
-# Launch 3-VM fuzzing swarm
-./fuzzing/start_swarm.sh 3
-
-# Run a single node manually
-./fuzzing/run_smart.sh 1
+make setup        # install deps, download dataset + checkpoint, build kernels + tools
 ```
 
-## Results snapshot
+See `make help` for individual build steps.
 
-| Checkpoint | Pass rate |
-|---|---|
-| SFT 500 steps | see `shared_corpus/risultati_checkpoint-500.txt` |
-| SFT 1000 steps | see `shared_corpus/risultati_checkpoint-1000.txt` |
-| SFT 2000 steps | see `shared_corpus/risultati_checkpoint-2000.txt` |
-| SFT 3000 steps | see `shared_corpus/risultati_checkpoint_3000.txt` |
+## Training
 
-Models and corpus are on HuggingFace (too large for git).
+```bash
+# Resume / run curated SFT training (3 epochs, auto-resumes from latest checkpoint)
+pixi run python ml/train.py --run curated
+```
+
+See `docs/training_log.md` for current training state and phase history.
+
+## Evaluation
+
+```bash
+# 1. Build ebpf_validator binary
+make build-validator
+
+# 2. Start evaluation VM (KASAN + KCOV kernel)
+./fuzzing/run_eval_vm.sh
+
+# 3. Run pass-rate evaluation
+pixi run python tools/evaluate_passrate.py \
+    --adapter checkpoints/curated_3ep/adattatore_ebpf_v1 \
+    --label curated-3ep \
+    --n 100
+```
+
+Results are saved to `results/passrate_*.csv`.
