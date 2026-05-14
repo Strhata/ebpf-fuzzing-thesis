@@ -16,7 +16,7 @@ MAC="52:54:00:12:34:5${ID}"
 LOG="vm${ID}_log.txt"
 
 # Smart Mode specific variables
-KERNEL_IMG="linux/arch/x86/boot/bzImage_smart"
+KERNEL_IMG="linux/arch/x86/boot/bzImage_kasan_kcov"
 MEMORY="6G" # Needed to fit the 500MB vmlinux into the RAM disk safely
 
 # --- NODE SPECIFIC CLEANUP ---

@@ -42,7 +42,7 @@ RUNS = {
     "curated": {
         "dataset":    REPO_ROOT / "data" / "dataset_final_qwen.jsonl",
         "output_dir": REPO_ROOT / "checkpoints" / "curated_3ep",
-        "resume":     REPO_ROOT / "checkpoints" / "sft_fase1" / "checkpoint-1500",
+        "resume":     REPO_ROOT / "checkpoints" / "curated_3ep" / "checkpoint-1500",
         "wandb_name": "curated-3ep",
     },
     "baseline": {
@@ -99,7 +99,6 @@ def load_base_model():
         device_map="auto",
         attn_implementation="sdpa",
     )
-    model.gradient_checkpointing_enable()
     return model
 
 
@@ -151,15 +150,18 @@ def main():
         output_dir=str(cfg["output_dir"]),
         num_train_epochs=3,
         per_device_train_batch_size=1,
+        per_device_eval_batch_size=8,
         gradient_accumulation_steps=8,
         learning_rate=2e-4,
         bf16=True,
         optim="paged_adamw_8bit",
         logging_steps=10,
-        save_steps=200,
+        save_steps=100,
         eval_strategy="steps",
-        eval_steps=200,
+        eval_steps=100,
         load_best_model_at_end=True,
+        metric_for_best_model="loss",
+        seed=42,
         report_to="wandb",
         run_name=cfg["wandb_name"],
     )

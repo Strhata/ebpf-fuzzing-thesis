@@ -22,8 +22,8 @@ if [ -z "$MODE" ] || [ -z "$ID" ]; then
     echo "Usage: $0 [-b | -s] <Node_ID>"
     echo ""
     echo "Options:"
-    echo "  -b : Blind Mode (Uses bzImage_blind, NO KCOV)"
-    echo "  -s : Smart Mode (Uses bzImage_smart, uploads vmlinux)"
+    echo "  -b : Blind Mode (Uses bzImage_kasan, NO KCOV)"
+    echo "  -s : Smart Mode (Uses bzImage_kasan_kcov, uploads vmlinux)"
     echo "====================================================="
     exit 1
 fi
@@ -34,10 +34,10 @@ LOG="vm${ID}_log.txt"
 
 # Dynamic Kernel Selection
 if [ "$MODE" == "smart" ]; then
-    KERNEL_IMG="linux/arch/x86/boot/bzImage_smart"
+    KERNEL_IMG="linux/arch/x86/boot/bzImage_kasan_kcov"
     MEMORY="6G"
 else
-    KERNEL_IMG="linux/arch/x86/boot/bzImage_blind"
+    KERNEL_IMG="linux/arch/x86/boot/bzImage_kasan"
     MEMORY="2G"
 fi
 

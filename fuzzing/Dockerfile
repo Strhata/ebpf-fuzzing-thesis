@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /fuzzing_lab
 
 # Copiamo gli asset fondamentali dall'host dentro l'immagine Docker
-COPY linux/arch/x86/boot/bzImage_blind /fuzzing_lab/bzImage
+COPY linux/arch/x86/boot/bzImage_kasan /fuzzing_lab/bzImage
 COPY trixie.img /fuzzing_lab/trixie.img
 COPY trixie.id_rsa /fuzzing_lab/trixie.id_rsa
 

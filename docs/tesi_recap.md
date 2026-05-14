@@ -37,8 +37,8 @@ motivati dall'aver capito strada facendo cosa stavo usando davvero.
   passwordless.
 - Sorgenti di **Linux 6.8.0** in `fuzzing_lab/linux/`, compilati in tre varianti:
   - `bzImage` — kernel standard
-  - `bzImage_blind` — **KCOV disattivato**, baseline di throughput del fuzzer
-  - `bzImage_smart` — **KCOV + KASAN + UBSAN** attivi, coverage-guided
+  - `bzImage_kasan` — **KCOV disattivato**, baseline di throughput del fuzzer
+  - `bzImage_kasan_kcov` — **KCOV + KASAN + UBSAN** attivi, coverage-guided
 - [`note.txt`](fuzzing_lab/note.txt) contiene le linee di comando QEMU provate,
   incluso il montaggio via `virtfs` 9p per condividere kernel e corpus col guest.
 
@@ -254,11 +254,11 @@ scp -i trixie.id_rsa -P 10022 -o "StrictHostKeyChecking no" \
     $HOME/tesi/buzzer/bazel-bin/buzzer_/buzzer root@localhost:/root/buzzer
 ```
 
-**QEMU con `bzImage_blind` e corpus condiviso**
+**QEMU con `bzImage_kasan` e corpus condiviso**
 ```bash
 qemu-system-x86_64 \
     -m 2G -smp 2 \
-    -kernel linux/arch/x86/boot/bzImage_blind \
+    -kernel linux/arch/x86/boot/bzImage_kasan \
     -append "console=ttyS0 root=/dev/sda rw earlyprintk=serial net.ifnames=0" \
     -drive file=trixie.img,format=raw \
     -nographic \

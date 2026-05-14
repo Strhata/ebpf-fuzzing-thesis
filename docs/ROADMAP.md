@@ -76,7 +76,7 @@
 - Test: compare verdict output with existing `ebpf_validator` on same inputs
 
 ### Phase 5 — QEMU snapshot setup (Day 15–20)
-- Boot VM with `bzImage_smart` (KCOV+KASAN enabled)
+- Boot VM with `bzImage_kasan_kcov` (KCOV+KASAN enabled)
 - Verify `kcov_validator` works inside VM
 - Save clean snapshot: `(qemu) savevm clean_state`
 - Write `tools/vm_manager.py`:

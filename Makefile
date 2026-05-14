@@ -35,7 +35,7 @@ help:
 	@echo "  make setup            Full environment setup (run once on a new machine)"
 	@echo "  make check-deps       Check for missing system dependencies"
 	@echo ""
-	@echo "  make build-kernel     Compile bzImage_blind and bzImage_smart (Linux 6.8)"
+	@echo "  make build-kernel     Compile bzImage_kasan and bzImage_kasan_kcov (Linux 6.8)"
 	@echo "  make build-buzzer     Build custom buzzer binary with Bazel"
 	@echo "  make build-validator  Build ebpf_validator Go binary"
 	@echo "  make build-image      Build trixie QEMU disk image + SSH keys"
@@ -59,7 +59,7 @@ setup: check-deps
 	@echo "[*] Downloading ML datasets from Strhata/ebpf-corpus..."
 	$(PIXI) huggingface-cli download Strhata/ebpf-corpus --repo-type dataset --local-dir $(REPO_ROOT)/data
 	@echo ""
-	@echo "[*] Downloading Phase 1 checkpoint from Strhata/ebpf-checkpoints..."
+	@echo "[*] Downloading Phase 1 adapter from Strhata/ebpf-checkpoints..."
 	$(PIXI) huggingface-cli download Strhata/ebpf-checkpoints --repo-type model --local-dir $(REPO_ROOT)/checkpoints/sft_fase1
 	@echo ""
 	$(MAKE) build-kernel
@@ -98,8 +98,8 @@ check-deps:
 
 # ── KERNEL BUILD ────────────────────────────────────────────
 # Downloads Linux 6.8 tarball (cached in build/linux/), verifies SHA256,
-# then compiles bzImage_blind and bzImage_smart using committed configs.
-build-kernel: $(REPO_ROOT)/fuzzing/bzImage_blind $(REPO_ROOT)/fuzzing/bzImage_smart
+# then compiles bzImage_kasan and bzImage_kasan_kcov using committed configs.
+build-kernel: $(REPO_ROOT)/fuzzing/bzImage_kasan $(REPO_ROOT)/fuzzing/bzImage_kasan_kcov
 
 $(KERNEL_CACHE):
 	@mkdir -p $(REPO_ROOT)/build/linux
@@ -114,21 +114,21 @@ $(KERNEL_SRC): $(KERNEL_CACHE)
 	tar -xf $(KERNEL_CACHE) -C $(REPO_ROOT)/build/linux
 	@echo "[+] Extracted to $(KERNEL_SRC)"
 
-$(REPO_ROOT)/fuzzing/bzImage_blind: $(KERNEL_SRC)
-	@echo "[*] Building bzImage_blind (KASAN + KCOV)..."
-	cp $(REPO_ROOT)/fuzzing/kernel_blind.config $(KERNEL_SRC)/.config
+$(REPO_ROOT)/fuzzing/bzImage_kasan: $(KERNEL_SRC)
+	@echo "[*] Building bzImage_kasan (KASAN only)..."
+	cp $(REPO_ROOT)/fuzzing/kernel_kasan.config $(KERNEL_SRC)/.config
 	$(MAKE) -C $(KERNEL_SRC) olddefconfig
 	$(MAKE) -C $(KERNEL_SRC) bzImage -j$(shell nproc)
-	cp $(KERNEL_SRC)/arch/x86/boot/bzImage $(REPO_ROOT)/fuzzing/bzImage_blind
-	@echo "[+] bzImage_blind built."
+	cp $(KERNEL_SRC)/arch/x86/boot/bzImage $(REPO_ROOT)/fuzzing/bzImage_kasan
+	@echo "[+] bzImage_kasan built."
 
-$(REPO_ROOT)/fuzzing/bzImage_smart: $(KERNEL_SRC)
-	@echo "[*] Building bzImage_smart (KASAN + KCOV + comparisons)..."
-	cp $(REPO_ROOT)/fuzzing/kernel_smart.config $(KERNEL_SRC)/.config
+$(REPO_ROOT)/fuzzing/bzImage_kasan_kcov: $(KERNEL_SRC)
+	@echo "[*] Building bzImage_kasan_kcov (KASAN + KCOV)..."
+	cp $(REPO_ROOT)/fuzzing/kernel_kasan_kcov.config $(KERNEL_SRC)/.config
 	$(MAKE) -C $(KERNEL_SRC) olddefconfig
 	$(MAKE) -C $(KERNEL_SRC) bzImage -j$(shell nproc)
-	cp $(KERNEL_SRC)/arch/x86/boot/bzImage $(REPO_ROOT)/fuzzing/bzImage_smart
-	@echo "[+] bzImage_smart built."
+	cp $(KERNEL_SRC)/arch/x86/boot/bzImage $(REPO_ROOT)/fuzzing/bzImage_kasan_kcov
+	@echo "[+] bzImage_kasan_kcov built."
 
 # ── BUZZER BUILD ────────────────────────────────────────────
 # Builds the custom buzzer binary (google/buzzer fork with ML data collection)
@@ -146,10 +146,10 @@ build-buzzer:
 # Output goes to data/corpus/ so the VM can access it via 9p mount.
 build-validator:
 	@echo "[*] Building ebpf_validator..."
-	cd $(REPO_ROOT)/fuzzing/ebpf_validator && \
+	cd $(REPO_ROOT)/tools/ebpf_validator && \
 	    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ebpf_validator .
 	@mkdir -p $(REPO_ROOT)/data/corpus
-	cp $(REPO_ROOT)/fuzzing/ebpf_validator/ebpf_validator $(REPO_ROOT)/data/corpus/ebpf_validator
+	cp $(REPO_ROOT)/tools/ebpf_validator/ebpf_validator $(REPO_ROOT)/data/corpus/ebpf_validator
 	chmod +x $(REPO_ROOT)/data/corpus/ebpf_validator
 	@echo "[+] ebpf_validator → data/corpus/ebpf_validator"
 
