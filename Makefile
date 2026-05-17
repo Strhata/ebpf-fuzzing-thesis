@@ -25,7 +25,8 @@ KERNEL_SRC     := $(REPO_ROOT)/build/linux/linux-$(KERNEL_VER)
 
 .PHONY: all setup check-deps \
         build-kernel build-buzzer build-validator build-image \
-        build-baseline train-curated train-baseline eval help
+        build-baseline train-curated train-baseline \
+        merge quantize eval help
 
 # ── DEFAULT ─────────────────────────────────────────────────
 all: help
@@ -43,7 +44,10 @@ help:
 	@echo "  make build-baseline   Build baseline dataset from raw corpus"
 	@echo "  make train-curated    Run Phase 2 curated SFT training (overnight)"
 	@echo "  make train-baseline   Run Phase 2 baseline SFT training (overnight)"
-	@echo "  make eval ADAPTER=<path>  Run Phase 3 pass-rate evaluation"
+	@echo ""
+	@echo "  make merge            Merge LoRA adapter into base weights (bf16)"
+	@echo "  make quantize         AWQ-quantize merged model for fast inference"
+	@echo "  make eval             Run Phase 3 pass-rate evaluation (VM must be running)"
 	@echo ""
 
 # ── SETUP ───────────────────────────────────────────────────
@@ -186,21 +190,26 @@ train-baseline: build-baseline
 	@echo "[*] Starting baseline training run..."
 	$(PIXI) python ml/train.py --run baseline
 
-# ── ML: EVALUATION ──────────────────────────────────────────
-# Run Phase 3 pass-rate evaluation.
-# ADAPTER is required: path to a trained adattatore_ebpf_v1 directory.
-# VM_KEY defaults to fuzzing/trixie.id_rsa (built by make build-image).
+# ── ML: INFERENCE PIPELINE ──────────────────────────────────
+# Post-training steps to prepare the model for fast inference.
+# Run in order: merge → quantize → eval
 #
-# Example:
-#   make eval ADAPTER=checkpoints/curated_3ep/adattatore_ebpf_v1
-#   make eval ADAPTER=checkpoints/curated_3ep/adattatore_ebpf_v1 VM_KEY=/path/to/key
-eval:
-ifndef ADAPTER
-	@echo "[!] ADAPTER is required. Example:"
-	@echo "    make eval ADAPTER=checkpoints/curated_3ep/adattatore_ebpf_v1"
-	@exit 1
-endif
+# merge:    Merges LoRA adapter into base weights (bf16). Skips if already done.
+# quantize: AWQ-quantizes merged model. Skips if already done.
+# eval:     Runs Phase 3 pass-rate evaluation against the AWQ model.
+#           VM must be running first: ./fuzzing/run_eval_vm.sh
+
+merge:
+	$(PIXI) python tools/merge_lora.py
+
+quantize: merge
+	$(PIXI) python tools/quantize_awq.py
+
+# ── ML: EVALUATION ──────────────────────────────────────────
+# Runs pass-rate evaluation using the AWQ-quantized model.
+# VM must be running: ./fuzzing/run_eval_vm.sh
+# VM_KEY defaults to fuzzing/trixie.id_rsa
+eval: merge
 	$(PIXI) python tools/evaluate_passrate.py \
-	    --adapter $(ADAPTER) \
-	    --label $(notdir $(ADAPTER)) \
+	    --model $(REPO_ROOT)/checkpoints/curated_merged \
 	    $(if $(VM_KEY),--vm-key $(VM_KEY),)

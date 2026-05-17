@@ -2,8 +2,8 @@
 """
 evaluate_passrate.py — Phase 3 pass-rate evaluation pipeline.
 
-For a given LoRA adapter:
-  1. Load Qwen2.5-Coder-1.5B + adapter
+For a given bf16 merged model:
+  1. Load model (bf16 + torch.compile for fast inference)
   2. Generate N eBPF programs (verifier-log format)
   3. Compile each: clang -target bpf → llvm-objcopy → raw hex
   4. Batch SCP hex strings to VM → run ebpf_validator in loop
@@ -11,8 +11,8 @@ For a given LoRA adapter:
 
 Usage:
   python tools/evaluate_passrate.py \\
-      --adapter /path/to/adattatore_ebpf_v1 \\
-      --label   curated-3ep \\
+      --model   /path/to/curated_merged \\
+      [--label  curated-merged] \\
       [--n 100] \\
       [--vm-port 10022] \\
       [--vm-key  ~/fuzzing_lab/trixie.id_rsa] \\
@@ -21,7 +21,7 @@ Usage:
       [--output-dir results/]
 
 VM must be running with shared_corpus mounted at /mnt/corpus:
-  mount -t 9p -o trans=virtio,version=9p2000.L corpus_share /mnt/corpus
+  ./fuzzing/run_eval_vm.sh
 """
 
 import argparse
@@ -55,11 +55,25 @@ def _parse_instructions(assembly_text: str) -> list[str]:
     return instructions
 
 
+_PC_GOTO = re.compile(r'\bgoto\s+pc([+-]\d+)')
+
+
+def _fix_branch(inst: str) -> str:
+    """Convert verifier-log branch syntax to LLVM BPF assembler syntax.
+
+    Verifier log:  if r4 & 0x1234 goto pc+71
+    LLVM BPF asm:  if r4 & 0x1234 goto +71
+    """
+    return _PC_GOTO.sub(r'goto \1', inst)
+
+
 def compile_to_hex(assembly_text: str, tmpdir: str) -> str | None:
     """Parse verifier log → eBPF assembly → ELF → raw hex. Returns hex string or None."""
     instructions = _parse_instructions(assembly_text)
     if not instructions:
         return None
+
+    instructions = [_fix_branch(i) for i in instructions]
 
     asm_src = ".section prog\n.globl main\nmain:\n"
     asm_src += "\n".join(f"    {i}" for i in instructions)
@@ -79,7 +93,7 @@ def compile_to_hex(assembly_text: str, tmpdir: str) -> str | None:
             check=True, capture_output=True,
         )
         subprocess.run(
-            ["llvm-objcopy", "-O", "binary", "--only-section=prog", elf_file, bin_file],
+            ["llvm-objcopy", "--dump-section", f"prog={bin_file}", elf_file, "/dev/null"],
             check=True, capture_output=True,
         )
     except subprocess.CalledProcessError:
@@ -98,36 +112,37 @@ def compile_to_hex(assembly_text: str, tmpdir: str) -> str | None:
 # Model generation
 # ---------------------------------------------------------------------------
 
-def load_model(adapter_path: str):
+def load_model(model_path: str):
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
-    print(f"[*] Loading {MODEL_NAME} + {adapter_path}")
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    print(f"[*] Loading bf16 model from {model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.bfloat16, device_map="auto"
     )
-    base = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME, quantization_config=bnb, device_map="auto", attn_implementation="sdpa"
-    )
-    model = PeftModel.from_pretrained(base, adapter_path)
     model.eval()
+    model = torch.compile(model, mode="reduce-overhead")
+
+    # Warmup: triggers compilation so the first real generate call uses the cached graph.
+    print("[*] Warming up compiled model...")
+    _prompt = "Kernel: unknown | Status: VALID\n### ASSEMBLY:\n"
+    _inp = tokenizer(_prompt, return_tensors="pt").to(next(model.parameters()).device)
+    with torch.no_grad():
+        model.generate(**_inp, max_new_tokens=5, do_sample=False,
+                       pad_token_id=tokenizer.pad_token_id)
+    print("[+] Model ready.")
     return model, tokenizer
 
 
 def generate_programs(model, tokenizer, n: int, temperature: float = 0.8) -> list[str]:
     import torch
     prompt = "Kernel: unknown | Status: VALID\n### ASSEMBLY:\n"
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
     programs = []
     for i in range(n):
@@ -200,8 +215,8 @@ def validate_batch(hex_strings: list[str], host: str, port: int, user: str, key:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--adapter",    required=True,  help="Path to LoRA adapter directory")
-    ap.add_argument("--label",      required=True,  help="Run label for output file (e.g. curated-3ep)")
+    ap.add_argument("--model",      required=True,  help="Path to bf16 merged model directory (or HuggingFace model ID for zero-shot)")
+    ap.add_argument("--label",      default=None,   help="Run label for output CSV (default: basename of --model)")
     ap.add_argument("--n",          type=int, default=100)
     ap.add_argument("--vm-host",    default="localhost")
     ap.add_argument("--vm-port",    type=int, default=10022)
@@ -214,6 +229,7 @@ def main():
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    label = args.label or Path(args.model).name
 
     # 1. Check VM
     if not args.skip_vm:
@@ -224,8 +240,8 @@ def main():
         print("[+] VM reachable.")
 
     # 2. Generate
-    print(f"\n[*] Generating {args.n} programs from {args.adapter}")
-    model, tokenizer = load_model(args.adapter)
+    print(f"\n[*] Generating {args.n} programs from {args.model}")
+    model, tokenizer = load_model(args.model)
     programs = generate_programs(model, tokenizer, args.n, args.temperature)
     del model  # free VRAM before SSH work
 
@@ -259,7 +275,7 @@ def main():
     errori    = sum(1 for v in verdicts if "ERRORE" in v or v == "SKIPPED" or not v)
 
     print(f"\n{'='*50}")
-    print(f" PASS-RATE RESULTS — {args.label}")
+    print(f" PASS-RATE RESULTS — {label}")
     print(f"{'='*50}")
     print(f" Generated  : {args.n}")
     print(f" Compiled   : {compile_ok}  ({compile_ok/args.n*100:.1f}%)")
@@ -270,7 +286,7 @@ def main():
 
     # 6. Save CSV
     import csv
-    out_file = out_dir / f"passrate_{args.label}.csv"
+    out_file = out_dir / f"passrate_{label}.csv"
     with out_file.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["id", "compiled", "verdict"])
@@ -287,7 +303,7 @@ def main():
         if write_header:
             w.writerow(["label", "n_generated", "n_compiled", "n_accettato", "compile_rate", "pass_rate"])
         w.writerow([
-            args.label, args.n, compile_ok, accettati,
+            label, args.n, compile_ok, accettati,
             f"{compile_ok/args.n*100:.1f}%",
             f"{accettati/args.n*100:.1f}%",
         ])

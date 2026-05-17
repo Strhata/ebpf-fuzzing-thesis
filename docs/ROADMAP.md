@@ -1,6 +1,6 @@
 # Thesis Roadmap — eBPF Fuzzing + ML
 **Target:** July graduation (45-day window). Extend to October if needed.
-**Decision date:** 2026-05-13
+**Last updated:** 2026-05-14
 
 ---
 
@@ -17,121 +17,82 @@
 | Training duration | 3 epochs (`num_train_epochs=3`), replacing `max_steps=1500` which only covered 48% of data. |
 | WandB | `report_to="wandb"`, loss curves during training only. Pass-rate evaluated separately post-training. |
 | Pass-rate eval | Standalone script: generate 100 programs → clang → llvm-objcopy → SSH → validator → table. |
-| Crash log analysis | Python script: parse 30 logs in `crash_logs/`, extract KASAN error type + top-3 stack frames → table for thesis. |
-| RL scope | In thesis. GRPO algorithm. "Framework + preliminary results" framing if time runs short. |
-| RL pipeline | generate assembly → `clang -target bpf -c` → `llvm-objcopy -O binary` (host) → SSH → `kcov_validator` (VM) → JSON reward |
-| kcov_validator | New C tool inside VM. Input: raw hex bytes. Does: KCOV mmap setup → BPF_PROG_LOAD syscall → KCOV read → stdout JSON `{verdict, pcs:[]}` |
-| Crash isolation | QEMU `savevm`/`loadvm` snapshots. Load clean snapshot before each program. Crash detected by SSH disconnect → reward assigned → restore snapshot. |
-| Coverage tracking | Cumulative global set of KCOV PCs across entire RL training run. New PCs = reward. |
-| Reward scale | crash=2.0 / new KCOV paths=1.0 / valid no new paths=0.4 / compiles+verifier rejects=0.1 / clang fails=0.0 |
-| Reward config | `reward_scale` parameter in config file. Log reward tier breakdown per step via WandB. |
+| Crash log analysis | Python script: parse logs in `results/`, extract KASAN error type + top-3 stack frames → table for thesis. |
+| Register annotation stripping | Baseline experiment: strip `; r0_w=0` style suffixes from verifier log during training. Tests whether removing register state noise improves pass-rate. Anecdotal hypothesis only — no prior data. |
+| RL scope | **Out of scope for this thesis.** GRPO + kcov_validator + QEMU snapshots deferred to future work. See *Future Work* section below. |
 
 ---
 
-## Work Phases
+## Work Phases (In Scope)
 
-### Phase 0 — Repo setup (Day 1)
-- Create `ebpf-fuzzing-thesis` private GitHub repo
+### Phase 0 — Repo setup ✅
+- Created `ebpf-fuzzing-thesis` private GitHub repo
 - Structure: `fuzzing/`, `ml/`, `tools/`, `docs/`
-- Copy code (not models, not corpus, not VM images)
-- `.gitignore`: `*.qcow2`, `*.img`, `modello_*/`, `shared_corpus/`, `.pixi/`
-- Add professors as collaborators
 - Upload final adapter + curated dataset to HuggingFace, add links to README
 
-### Phase 1 — Crash log analysis (Day 1–2)
-- Write `tools/classify_crashes.py`
-- Input: `fuzzing_lab/crash_logs/*.txt`
-- Output: CSV table (VM, timestamp, KASAN type, top-3 stack frames)
-- Use table in thesis section: "buzzer triggered N unique crash categories"
+### Phase 1 — Data collection ✅
+- Modified `fuzzing/buzzer/pkg/units/ffi.go` (~50 lines) to intercept `ValidateEbpfProgram`
+- Dumps JSONL at kernel FFI boundary: `bytecode_hex`, `verifier_log`, `is_valid`, `error_line`, `error_reason`
+- Dockerized single-VM setup (KASAN-only kernel, virtio-9p corpus share)
+- Collected ~2M entries
+- Crash logs from early swarm exploration in `results/`; crash analysis in `tools/classify_crashes.py`
 
-### Phase 2 — SFT retrain + comparison (Day 2–10)
-1. Build baseline dataset: random 27k from valid-byte-filtered corpus (no category cap)
-   - Script: `ml/build_baseline_dataset.py`
-2. Add WandB to `SFT_tesi.ipynb`:
-   - `pip install wandb`
-   - `wandb.init(project="ebpf-thesis", name="curated-3ep")`
-   - Change `report_to="none"` → `report_to="wandb"`
-   - Change `max_steps=1500` → `num_train_epochs=3`
-3. Train curated model (overnight run 1)
-4. Train baseline model, same config, `wandb name="baseline-3ep"` (overnight run 2)
-5. Compare WandB loss curves — expected: curated model lower eval loss, faster convergence
+### Phase 2 — Dataset curation + SFT ✅ (training in progress)
+- Analyzed error class distribution across ~2M raw entries
+- Balanced to 27k samples (cap 2000/class) to avoid top-error-class domination
+- Baseline dataset: same 27k, no cap, dominated by top class — control for curation value
+- Format: assembly (verifier-log style) only — hex abandoned (LLMs can't generate valid hex reliably)
+- QLoRA fine-tune: Qwen2.5-Coder-1.5B, rank-16, Q/K/V/O projections, 3 epochs
+- See `docs/training_log.md` for current checkpoint state
 
-### Phase 3 — Pass-rate evaluation pipeline (Day 8–12)
+### Phase 3 — Pass-rate evaluation (pending training completion)
 - Script: `tools/evaluate_passrate.py`
-- Steps: load model → generate 100 programs → clang compile → llvm-objcopy → SSH into VM → run `ebpf_validator` in loop → count ACCETTATO → report pass-rate
-- Run on both models, produce comparison table
+- Pipeline: load adapter → generate 100 programs → clang BPF compile → llvm-objcopy → SSH to VM → `ebpf_validator` loop → CSV output
+- Evaluation VM: KASAN+KCOV kernel (`bzImage_kasan_kcov`) via `./fuzzing/run_eval_vm.sh`
+- Run on curated model and baseline model, produce comparison table
 - Expected: curated model higher pass-rate, especially on rare error categories
-
-### Phase 4 — kcov_validator (Day 10–18)
-- Write `tools/kcov_validator.c` inside VM (or cross-compile for eBPF target)
-- Interface: `./kcov_validator <hex_bytes>`
-- Output: `{"verdict":"ACCETTATO","pcs":[0x1234,0x5678,...]}`
-- Logic:
-  1. Open `/sys/kernel/debug/kcov`
-  2. `ioctl(KCOV_INIT_TRACE3)` + mmap
-  3. `ioctl(KCOV_ENABLE)`
-  4. Call `bpf(BPF_PROG_LOAD, ...)` syscall with provided bytes
-  5. `ioctl(KCOV_DISABLE)`
-  6. Read PC array, output JSON
-- Test: compare verdict output with existing `ebpf_validator` on same inputs
-
-### Phase 5 — QEMU snapshot setup (Day 15–20)
-- Boot VM with `bzImage_kasan_kcov` (KCOV+KASAN enabled)
-- Verify `kcov_validator` works inside VM
-- Save clean snapshot: `(qemu) savevm clean_state`
-- Write `tools/vm_manager.py`:
-  - `restore_snapshot()`: send `loadvm clean_state` to QEMU monitor socket
-  - `run_program(hex_bytes)`: SSH → run `kcov_validator` → parse JSON → detect crash (SSH timeout/disconnect)
-  - `compute_reward(verdict, new_pcs, global_pc_set)`: implement reward scale
-
-### Phase 6 — RL training loop (Day 18–35)
-- Algorithm: GRPO (Group Relative Policy Optimization)
-- Notebook: `ml/rl_grpo.ipynb`
-- Loop:
-  1. Sample prompt (target: VALID / specific error class)
-  2. Generate G=8 completions (model in 8-bit for inference speed)
-  3. For each completion: clang → objcopy → `vm_manager.run_program()` → reward
-  4. GRPO update on reward-ranked group
-  5. Log reward tier counts to WandB
-  6. Persist global KCOV PC set to disk (checkpoint)
-- Early stopping: if pass-rate plateaus for 5 consecutive eval rounds
-
-### Phase 7 — Results + thesis writing (Day 30–45)
-- Thesis figures:
-  - WandB loss curves (curated vs baseline)
-  - Pass-rate table (curated vs baseline, per error category)
-  - Crash classification table (30 logs)
-  - RL reward progression over training steps
-  - KCOV new-paths-per-step graph
-- `[DA COMPLETARE]` sections in `tesi_recap.md`:
-  - Section 6: write motivation for LLM pivot
-  - Section 7: fill pass-rate table with actual numbers from `risultati_checkpoint-*.txt`
 
 ---
 
-## Repo Structure
+## Future Work (Out of Scope)
+
+These were considered and deferred. Documented here so the thesis can reference them honestly.
+
+- **RL with GRPO**: generate assembly → compile → run in VM → coverage-aware reward → policy update. Infrastructure exists (KCOV-enabled kernel, evaluation VM) but training loop not implemented.
+- **kcov_validator**: C tool inside VM that wraps `bpf(BPF_PROG_LOAD)` with KCOV mmap and returns `{verdict, pcs:[]}` JSON. Would replace `ebpf_validator` for RL reward computation.
+- **QEMU snapshot isolation**: `savevm`/`loadvm` for crash recovery between RL steps. Needed for safe RL training but not required for SFT evaluation.
+- **Register annotation stripping experiment**: strip `; r0_w=0` style suffixes from verifier log and test effect on pass-rate. Low-cost experiment if time allows after Phase 3.
+
+---
+
+## Repo Structure (Current)
 
 ```
 ebpf-fuzzing-thesis/
-├── README.md                    # Project overview, HuggingFace links
-├── fuzzing/                     # Phase 1-2 infrastructure
-│   ├── create-image.sh
-│   ├── start_swarm.sh
-│   ├── run_node.sh / run_smart.sh
-│   ├── Dockerfile + entrypoint.sh
-│   └── crash_logs/              # 30 crash dumps
-├── ml/                          # ML work
-│   ├── data_analisys.ipynb
-│   ├── SFT_tesi.ipynb           # Retrained with WandB + 3 epochs
-│   ├── rl_grpo.ipynb            # RL training
+├── README.md
+├── fuzzing/
+│   ├── buzzer/                      # Modified buzzer fork (ffi.go data extraction)
+│   ├── exploration/                 # Early swarm/KCOV exploration scripts (historical)
+│   ├── Dockerfile + entrypoint.sh  # Data collection container
+│   ├── run_eval_vm.sh              # Evaluation VM launcher (KASAN+KCOV)
+│   ├── bzImage_kasan               # KASAN-only kernel (data collection)
+│   └── bzImage_kasan_kcov          # KASAN+KCOV kernel (evaluation + future RL)
+├── ml/
+│   ├── train.py                    # SFT training script (curated + baseline runs)
 │   └── build_baseline_dataset.py
-├── tools/                       # Pipeline scripts
-│   ├── classify_crashes.py      # Phase 1
-│   ├── evaluate_passrate.py     # Phase 3
-│   ├── kcov_validator.c         # Phase 4 (compiled inside VM)
-│   └── vm_manager.py            # Phase 5 QEMU/SSH wrapper
+├── tools/
+│   ├── classify_crashes.py
+│   ├── evaluate_passrate.py        # Phase 3 pass-rate pipeline
+│   └── ebpf_validator/             # Go binary for kernel verifier validation
+├── data/
+│   └── dataset_final_qwen.jsonl    # Curated 27k training set (also on HuggingFace)
+├── checkpoints/
+│   ├── sft_fase1/                  # Phase 1 adapter (warm-start base)
+│   └── curated_3ep/                # Phase 2 curated adapter (in training)
+├── results/                        # Crash logs, pass-rate CSVs
 └── docs/
-    └── tesi_recap.md            # Updated recap
+    ├── training_log.md             # Checkpoint state tracking
+    └── tesi_recap.md               # Thesis chapter notes
 ```
 
 ---
@@ -140,8 +101,7 @@ ebpf-fuzzing-thesis/
 
 | Risk | Mitigation |
 |---|---|
-| RL doesn't converge in 45 days | Report framework + preliminary results; frame as future work |
-| KCOV interface differs on Linux 6.8.0 | Check kernel headers before writing kcov_validator |
-| QEMU savevm slow on qcow2 | Benchmark first; fallback: re-boot from base image (slower but same isolation) |
 | Baseline model performs equally to curated | Still publishable: shows robustness of balancing; adjust claim in thesis |
-| GPU OOM during GRPO | Use 8-bit inference for generation, reduce G from 8 to 4 |
+| Pass-rate too low on both models | Report absolute numbers honestly; frame as baseline for future RL work |
+| Training diverges in Phase 2 warm start (lost optimizer state) | Monitor eval loss; if unstable, reduce LR and re-run from sft_fase1 adapter |
+| July deadline too tight | Phase 3 is the minimum deliverable; RL section becomes "future work" in thesis |

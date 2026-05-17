@@ -22,47 +22,54 @@ Steps per epoch: ~3,095 | 3 epochs total: ~9,285 steps
 
 ---
 
-## Phase 2 — curated_3ep (this morning, 2026-05-14)
+## Phase 2 — curated_3ep warm start (2026-05-14)
 
 | Field | Value |
 |---|---|
 | Location | `checkpoints/curated_3ep/` |
-| Best adapter | `checkpoints/curated_3ep/adattatore_ebpf_v1` |
 | Resume checkpoint | `checkpoints/curated_3ep/checkpoint-1500` |
-| Steps | 1,500 (`max_steps=1500` — bug now fixed) |
+| Steps | 1,500 warm-start steps (`max_steps=1500` — bug, now fixed) |
 | Epoch | 0.485 |
-| Best eval_loss | **0.6061** (improved from Phase 1) |
+| Best eval_loss | 0.6061 |
 | Resumed from | `checkpoints/sft_fase1/adattatore_ebpf_v1` |
 | WandB run | `curated-3ep` — https://wandb.ai/stefano-raheli-universit-del-salento/ebpf-thesis/runs/jeaaxzxr |
 
 ---
 
-## Phase 3 — curated_3ep completion (TODO)
+## Phase 3 — curated_3ep full run ✅ (2026-05-14, completed)
 
 | Field | Value |
 |---|---|
-| Command | `pixi run python ml/train.py --run curated` |
-| Resumes from | `checkpoints/curated_3ep/checkpoint-1500` (warm start — adapter weights only) |
-| Epochs | 3 full epochs on curated dataset (fresh optimizer from checkpoint-1500 weights) |
-| Fix applied | `max_steps=1500` → `num_train_epochs=3` in `ml/train.py` |
-| Estimated time | ~4.3 h at ~1.67 s/step on RTX 4070 Laptop |
-| Note | Full checkpoint resume blocked by PyTorch 2.5.1 CVE-2025-32434 check on optimizer.pt. Warm start used instead. |
+| Location | `checkpoints/curated_3ep/` |
+| Best adapter | `checkpoints/curated_3ep/adattatore_ebpf_v1` |
+| Resumed from | `checkpoints/curated_3ep/checkpoint-1500` (warm start — adapter weights only) |
+| Steps | 9,288 total (3 full epochs) |
+| Epochs | 3.0 |
+| Final train loss | 0.5513 |
+| Final eval loss | **0.5571** |
+| Train runtime | 96,550 s (~26.8 h incl. eval every 100 steps; ~4 h pure training) |
+| Throughput | 0.769 samples/sec (incl. eval overhead) |
+| WandB run | `curated-3ep` — https://wandb.ai/stefano-raheli-universit-del-salento/ebpf-thesis/runs/7xybam1s |
+| Log | `training_curated_3ep_full.log` (repo root) |
 
 ---
 
-## Cumulative state
+## Cumulative state (as of 2026-05-17)
 
-Total gradient steps applied to current best model (`curated_3ep/adattatore_ebpf_v1`):
-- Phase 1: 1,500 steps on curated dataset
-- Phase 2: 1,500 more steps on curated dataset  
-- **Total: ~3,000 steps ≈ 0.97 epochs on curated dataset**
-
-Phase 3 will bring this to ~9,285 steps = 3 full epochs.
+| Model | Steps | Epochs | Eval loss | Status |
+|---|---|---|---|---|
+| `checkpoints/sft_fase1/adattatore_ebpf_v1` | 1,500 | 0.485 | 0.6210 | Warm-start base |
+| `checkpoints/curated_3ep/adattatore_ebpf_v1` | 9,288 | 3.0 | **0.5571** | **Current best** |
 
 ---
 
-## Evaluation (TODO — after Phase 3)
+## Next: Phase 4 — Pass-rate evaluation
 
-Pipeline: `tools/evaluate_passrate.py --adapter checkpoints/curated_3ep/adattatore_ebpf_v1`  
-Requires: QEMU VM running `bzImage_kasan_kcov`, `ebpf_validator` at `/mnt/corpus/`  
-See: `.scratch/thesis-plan/PRD.md` for full evaluation spec.
+Merge adapter to bf16 then evaluate:
+```
+pixi run python tools/merge_lora.py
+pixi run python tools/evaluate_passrate.py --model checkpoints/curated_merged --label curated-merged --n 100
+pixi run python tools/evaluate_passrate.py --model Qwen/Qwen2.5-Coder-1.5B --label zero-shot --n 100
+```
+Requires: QEMU VM running `bzImage_kasan_kcov`, `ebpf_validator` at `/mnt/corpus/`.  
+See: `.scratch/rl-pipeline/PRD.md` for full spec.

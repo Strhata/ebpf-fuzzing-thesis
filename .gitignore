@@ -34,6 +34,9 @@ __pycache__/
 # Local secrets
 .env
 
+# WandB local run logs (synced to cloud)
+wandb/
+
 # Scratch / planning docs
 .scratch/
 
