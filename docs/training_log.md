@@ -63,13 +63,19 @@ Steps per epoch: ~3,095 | 3 epochs total: ~9,285 steps
 
 ---
 
-## Next: Phase 4 — Pass-rate evaluation
+## Phase 4 — Pass-rate evaluation ✅ (2026-05-17)
 
-Merge adapter to bf16 then evaluate:
-```
-pixi run python tools/merge_lora.py
-pixi run python tools/evaluate_passrate.py --model checkpoints/curated_merged --label curated-merged --n 100
-pixi run python tools/evaluate_passrate.py --model Qwen/Qwen2.5-Coder-1.5B --label zero-shot --n 100
-```
-Requires: QEMU VM running `bzImage_kasan_kcov`, `ebpf_validator` at `/mnt/corpus/`.  
-See: `.scratch/rl-pipeline/PRD.md` for full spec.
+| Model | N | Compiled | ACCETTATO | Compile rate | Pass-rate |
+|---|---|---|---|---|---|
+| `curated-merged` | 100 | 73 | **60** | 73.0% | **60.0%** |
+| `zero-shot` (Qwen2.5-Coder-1.5B base) | 100 | 1 | 1 | 1.0% | 1.0% |
+
+**Key result**: SFT raises pass-rate from ~0% (base model, functionally zero) to **60%**, proving that verifier-log training data teaches the model to generate BPF-verifier-accepted programs.
+
+Logs: `results/passrate_run_curated.log`, `results/passrate_run_zeroshot.log`  
+CSV: `results/passrate_summary.csv`
+
+### Next: Phase 5 — RL with GRPO
+
+Build `tools/kcov_validator/` (Go), then `ml/reward.py` + `ml/rl_grpo.py`.  
+See: `.scratch/rl-pipeline/issues-draft.md` issues 04–08.
