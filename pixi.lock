@@ -333,6 +333,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/80/50/540cd3aeefc041beb111125c4bff779831a2111fc6b15a9138cda277d32c/pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/29/41/f2b800b7f12a05dd48c2a6280d4dd812d1425fc66ed3fe3fd99420c41d1a/sentry_sdk-2.60.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/62/0150e02e697be177c11962ef12e00d692943d69e33801a231bcd853c2dad/trl-0.14.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/7b/e9/b4bf8f3509dcea1cec52233a38991459654635b5a8e6a494eb912e1b9cfb/wandb-0.26.1-py3-none-manylinux_2_28_x86_64.whl
 packages:
@@ -4446,6 +4447,64 @@ packages:
   - pkg:pypi/transformers?source=compressed-mapping
   size: 3962753
   timestamp: 1778645573996
+- pypi: https://files.pythonhosted.org/packages/05/62/0150e02e697be177c11962ef12e00d692943d69e33801a231bcd853c2dad/trl-0.14.0-py3-none-any.whl
+  name: trl
+  version: 0.14.0
+  sha256: 2407df4ea0e92d2c228a49f92047b4856b2e09bdfc1cde2b2151d342092efee2
+  requires_dist:
+  - accelerate>=0.34.0
+  - datasets>=2.21.0
+  - rich
+  - transformers>=4.46.0
+  - deepspeed>=0.14.4 ; sys_platform != 'win32' and extra == 'deepspeed'
+  - diffusers>=0.18.0 ; extra == 'diffusers'
+  - openai>=1.23.2 ; extra == 'judges'
+  - llm-blender>=0.0.2 ; extra == 'judges'
+  - liger-kernel>=0.4.0 ; sys_platform != 'win32' and extra == 'liger'
+  - mergekit>=0.0.5.1 ; extra == 'mergekit'
+  - peft>=0.8.0 ; extra == 'peft'
+  - bitsandbytes ; extra == 'quantization'
+  - scikit-learn ; extra == 'scikit'
+  - parameterized ; extra == 'test'
+  - pytest-cov ; extra == 'test'
+  - pytest-rerunfailures ; extra == 'test'
+  - pytest-xdist ; extra == 'test'
+  - pytest ; extra == 'test'
+  - vllm ; sys_platform != 'win32' and extra == 'vllm'
+  - pillow ; extra == 'vlm'
+  - deepspeed>=0.14.4 ; sys_platform != 'win32' and extra == 'dev'
+  - diffusers>=0.18.0 ; extra == 'dev'
+  - openai>=1.23.2 ; extra == 'dev'
+  - llm-blender>=0.0.2 ; extra == 'dev'
+  - liger-kernel>=0.4.0 ; sys_platform != 'win32' and extra == 'dev'
+  - mergekit>=0.0.5.1 ; extra == 'dev'
+  - peft>=0.8.0 ; extra == 'dev'
+  - bitsandbytes ; extra == 'dev'
+  - scikit-learn ; extra == 'dev'
+  - parameterized ; extra == 'dev'
+  - pytest-cov ; extra == 'dev'
+  - pytest-rerunfailures ; extra == 'dev'
+  - pytest-xdist ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - vllm ; sys_platform != 'win32' and extra == 'dev'
+  - pillow ; extra == 'dev'
+  - deepspeed>=0.14.4 ; sys_platform != 'win32' and extra == 'dev'
+  - diffusers>=0.18.0 ; extra == 'dev'
+  - openai>=1.23.2 ; extra == 'dev'
+  - llm-blender>=0.0.2 ; extra == 'dev'
+  - liger-kernel>=0.4.0 ; sys_platform != 'win32' and extra == 'dev'
+  - mergekit>=0.0.5.1 ; extra == 'dev'
+  - peft>=0.8.0 ; extra == 'dev'
+  - bitsandbytes ; extra == 'dev'
+  - scikit-learn ; extra == 'dev'
+  - parameterized ; extra == 'dev'
+  - pytest-cov ; extra == 'dev'
+  - pytest-rerunfailures ; extra == 'dev'
+  - pytest-xdist ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - vllm ; sys_platform != 'win32' and extra == 'dev'
+  - pillow ; extra == 'dev'
+  requires_python: '>=3.9'
 - conda: https://conda.anaconda.org/conda-forge/noarch/typer-0.25.1-pyhcf101f3_0.conda
   sha256: 18fc3a27bc995318d09142fe16d01ea454e76f377bf8f68db03b8b18f11085ed
   md5: ef114c2eb2ff19f6bf616c81f4710841

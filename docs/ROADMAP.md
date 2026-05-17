@@ -1,6 +1,6 @@
 # Thesis Roadmap — eBPF Fuzzing + ML
 **Target:** July graduation (45-day window). Extend to October if needed.
-**Last updated:** 2026-05-14
+**Last updated:** 2026-05-17
 
 ---
 
@@ -18,6 +18,8 @@
 | WandB | `report_to="wandb"`, loss curves during training only. Pass-rate evaluated separately post-training. |
 | Pass-rate eval | Standalone script: generate 100 programs → clang → llvm-objcopy → SSH → validator → table. |
 | Crash log analysis | Python script: parse logs in `results/`, extract KASAN error type + top-3 stack frames → table for thesis. |
+| KCOV mode | `KCOV_TRACE_PC` (value=0). Confirmed 2026-05-17 via `linux/include/uapi/linux/kcov.h`. Flat uint64 PC array, 1 word per entry. |
+| TRL version | 0.14.0 (pixi-managed, `<0.15` pin). `GRPOTrainer` importable with workaround: patch `trl.import_utils.is_vllm_available = lambda: False` before import, and set `use_vllm=False` in `GRPOConfig`. Root cause: `is_vllm_available()` returns tuple `(False, None)` which is truthy in Python. |
 | Register annotation stripping | Baseline experiment: strip `; r0_w=0` style suffixes from verifier log during training. Tests whether removing register state noise improves pass-rate. Anecdotal hypothesis only — no prior data. |
 | RL scope | **Out of scope for this thesis.** GRPO + kcov_validator + QEMU snapshots deferred to future work. See *Future Work* section below. |
 
