@@ -12,8 +12,18 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+_REPO_ROOT_GRPO = Path(__file__).parent.parent
+_GRPO_DEBUG_LOG = _REPO_ROOT_GRPO / "results" / "grpo_completions.log"
+logging.basicConfig(
+    filename=str(_GRPO_DEBUG_LOG),
+    level=logging.DEBUG,
+    format="%(asctime)s %(message)s",
+)
+_log_grpo = logging.getLogger("grpo")
 
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "ml"))
@@ -23,14 +33,138 @@ sys.path.insert(0, str(_REPO_ROOT / "ml"))
 import trl.import_utils as _trl_utils
 _trl_utils.is_vllm_available = lambda: False
 
+import re
+import time
+import datetime
+
 import torch
+from transformers import BitsAndBytesConfig, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 import wandb
 from datasets import Dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
+from trl.trainer import grpo_trainer as _grpo_mod
 
 import reward as rw
+
+# Root cause fix: transformers 5.x + gradient_checkpointing + train() mode causes
+# Qwen2DecoderLayer to forcibly set past_key_values=None in every forward pass,
+# corrupting the KV cache during autoregressive generation and producing garbage text.
+# Fix: switch to eval + disable grad_ckpt for the generate() call, restore afterward.
+import trl.models as _trl_models
+import contextlib as _contextlib
+
+_orig_unwrap = _trl_models.unwrap_model_for_generation.__wrapped__ if hasattr(_trl_models.unwrap_model_for_generation, '__wrapped__') else None
+
+@_contextlib.contextmanager
+def _fixed_unwrap_model_for_generation(model, accelerator, is_peft_model=False, gather_deepspeed3_params=True):
+    unwrapped = accelerator.unwrap_model(model)
+    was_training = unwrapped.training
+    had_grad_ckpt = getattr(unwrapped, 'is_gradient_checkpointing', False)
+    if was_training:
+        unwrapped.eval()
+    if had_grad_ckpt:
+        unwrapped.gradient_checkpointing_disable()
+    try:
+        if is_peft_model:
+            unwrapped.pretrained_model.disable_adapter()
+        # No deepspeed zero-3 handling needed for our setup
+        yield unwrapped
+    finally:
+        if had_grad_ckpt:
+            unwrapped.gradient_checkpointing_enable()
+        if was_training:
+            unwrapped.train()
+
+_trl_models.unwrap_model_for_generation = _fixed_unwrap_model_for_generation
+# Also patch the reference in grpo_trainer module namespace
+_grpo_mod.unwrap_model_for_generation = _fixed_unwrap_model_for_generation
+
+_SANITY_LOG = _REPO_ROOT / "results" / "sanity_checks.log"
+_VERDICT_PAT = re.compile(r'\b(ACCETTATO|RIFIUTATO|ENCODE_FAIL|SSH_TIMEOUT)\b')
+
+
+class SanityCheckCallback(TrainerCallback):
+    """Periodic health check — fires every `interval_secs` seconds.
+
+    Checks:
+      - VM reachability (SSH echo)
+      - Verdict breakdown for the last 200 completions
+      - Cumulative PC count
+    Prints a report to stdout and appends to results/sanity_checks.log.
+    Prints a WARNING line if ENCODE_FAIL > 50% or VM is unreachable.
+    """
+
+    def __init__(self, ssh: rw.SSHClient, interval_secs: int = 3600):
+        self._ssh = ssh
+        self._interval = interval_secs
+        self._next_check = time.time() + interval_secs
+
+    def on_step_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ) -> None:
+        if time.time() < self._next_check:
+            return
+        self._next_check = time.time() + self._interval
+        self._run_check(state.global_step)
+
+    def _run_check(self, step: int) -> None:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [f"[{now}] === SANITY CHECK step={step} ==="]
+
+        # PC discovery
+        lines.append(f"  cumulative_pcs : {len(rw._pc_set)}")
+
+        # Recent verdict breakdown (last 200 completions from log)
+        verdicts = self._recent_verdicts(200)
+        total = sum(verdicts.values()) or 1
+        breakdown = "  ".join(
+            f"{k}={v}({100 * v // total}%)" for k, v in verdicts.items() if v
+        )
+        lines.append(f"  last_200       : {breakdown or 'no data yet'}")
+
+        # VM connectivity
+        try:
+            rc, out, _ = self._ssh.run("echo pong", timeout=5)
+            vm_ok = rc == 0 and "pong" in out
+            vm_status = "UP" if vm_ok else f"UNEXPECTED rc={rc}"
+        except Exception as exc:
+            vm_ok = False
+            vm_status = f"DOWN ({exc})"
+        lines.append(f"  vm_status      : {vm_status}")
+
+        # Alert conditions
+        ef_rate = verdicts.get("ENCODE_FAIL", 0) / total
+        if ef_rate > 0.5:
+            lines.append(
+                f"  WARNING: ENCODE_FAIL {ef_rate:.0%} > 50% — encoder may have regressed"
+            )
+        if not vm_ok:
+            lines.append(
+                "  WARNING: VM unreachable — rewards will time out (crash signal flood)"
+            )
+
+        report = "\n".join(lines)
+        print(report, flush=True)
+        with _SANITY_LOG.open("a") as f:
+            f.write(report + "\n\n")
+
+    def _recent_verdicts(self, n: int) -> dict:
+        counts: dict[str, int] = {}
+        try:
+            text = _GRPO_DEBUG_LOG.read_text()
+            matches = _VERDICT_PAT.findall(text)
+            for v in matches[-n:]:
+                counts[v] = counts.get(v, 0) + 1
+        except FileNotFoundError:
+            pass
+        return counts
+
 
 _PROMPT = "Kernel: unknown | Status: VALID\n### ASSEMBLY:\n"
 
@@ -43,9 +177,18 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
     """Return reward function with signature (prompts, completions, **kw) -> list[float]."""
     _state = {"prev_pc_count": len(rw._pc_set)}
 
+    _call = [0]
+
     def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
         if smoke_test:
             return [0.4] * len(completions)
+
+        call_id = _call[0]
+        _call[0] += 1
+        if call_id < 3:
+            for j, (p, c) in enumerate(zip(prompts, completions)):
+                print(f"[GRPO-PROMPT] call={call_id} j={j} prompt={p[:80]!r}", flush=True)
+                print(f"[GRPO-COMPLETION] call={call_id} j={j} completion={c[:200]!r}", flush=True)
 
         rewards = rw.compute_rewards(completions, ssh)
 
@@ -84,6 +227,14 @@ def main():
     ap.add_argument("--vm-key", default=str(Path.home() / "fuzzing_lab" / "trixie.id_rsa"))
     ap.add_argument("--num-generations", type=int, default=8,
                     help="G: completions per prompt per step (reduce if VRAM tight)")
+    ap.add_argument("--max-completion-length", type=int, default=400,
+                    help="Max tokens for generated BPF assembly completions")
+    ap.add_argument("--max-steps", type=int, default=-1,
+                    help="Stop after this many steps (-1 = run until end of dataset)")
+    ap.add_argument("--beta", type=float, default=0.01,
+                    help="KL penalty coefficient (0.0 = no regularization, risks policy collapse)")
+    ap.add_argument("--sanity-interval", type=int, default=3600,
+                    help="Seconds between sanity checks (default 1h; 0 = disabled)")
     args = ap.parse_args()
 
     ssh = rw.SSHClient(host=args.vm_host, port=args.vm_port, key=args.vm_key)
@@ -94,14 +245,19 @@ def main():
         n_dataset = 100
         print("[smoke-test] 10 steps, G=2, mock reward — VM not required")
     else:
-        n_steps = -1
+        n_steps = args.max_steps
         n_generations = args.num_generations
         n_dataset = 10_000
 
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
     print(f"[*] Loading model from {args.model}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=torch.bfloat16,
+        quantization_config=bnb_config,
         device_map="auto",
     )
     # Required for gradient checkpointing with PEFT LoRA
@@ -125,13 +281,13 @@ def main():
         run_name="grpo-smoke-test" if args.smoke_test else "grpo-rl-v1",
         num_generations=n_generations,
         max_prompt_length=64,
-        max_completion_length=400,
+        max_completion_length=args.max_completion_length,
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=1,
         num_train_epochs=1 if args.smoke_test else 3,
         max_steps=10 if args.smoke_test else n_steps,
         learning_rate=5e-6,
-        beta=0.0,
+        beta=args.beta,
         temperature=0.9,
         logging_steps=1,
         save_steps=10 if args.smoke_test else 200,
@@ -144,12 +300,18 @@ def main():
     dataset = _build_dataset(n_dataset)
     reward_fn = _make_reward_fn(ssh, smoke_test=args.smoke_test)
 
+    callbacks = []
+    if not args.smoke_test and args.sanity_interval > 0:
+        callbacks.append(SanityCheckCallback(ssh, interval_secs=args.sanity_interval))
+        print(f"[*] Sanity check every {args.sanity_interval}s → results/sanity_checks.log")
+
     trainer = GRPOTrainer(
         model=model,
         reward_funcs=reward_fn,
         args=grpo_config,
         train_dataset=dataset,
         peft_config=peft_config,
+        callbacks=callbacks or None,
     )
 
     if args.resume_from:

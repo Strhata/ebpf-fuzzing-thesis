@@ -7,21 +7,29 @@ Public interface:
 Reward tiers:
     crash        → 2.0  (SSH timeout; VM may have crashed, coverage frontier signal)
     new_pcs      → 1.0  (ACCETTATO + at least 1 PC not seen before)
-    valid        → 0.4  (ACCETTATO, no new PCs)
+    valid        → 0.1  (ACCETTATO, no new PCs)
     rejected     → 0.1  (RIFIUTATO by BPF verifier)
-    compile_fail → 0.0  (assembly did not compile)
+    encode_fail  → 0.0  (no parseable instructions)
 """
 
 import json
-import os
+import logging
 import re
+import struct
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
 _PC_SET_PATH = _REPO_ROOT / "results" / "rl_pc_set.json"
+_DEBUG_LOG = _REPO_ROOT / "results" / "reward_debug.log"
+
+logging.basicConfig(
+    filename=str(_DEBUG_LOG),
+    level=logging.DEBUG,
+    format="%(asctime)s %(message)s",
+)
+_log = logging.getLogger("reward")
 
 _pc_set: set[int] = set()
 _call_count: int = 0
@@ -71,11 +79,21 @@ class SSHClient:
 
 
 # ---------------------------------------------------------------------------
-# Assembly → BPF hex compiler (mirrors tools/evaluate_passrate.py)
+# BPF bytecode encoder — bypasses clang, sends raw instructions to verifier
+#
+# Model output is in kernel verifier dump format: "N: (XX) instruction [; comment]"
+# The opcode byte (XX) is extracted directly; dst/src/off/imm are parsed from text.
+# Programs with weird operands reach the verifier instead of being rejected by clang.
 # ---------------------------------------------------------------------------
 
-_INST_PATTERN = re.compile(r"^\s*\d+:\s*\([0-9a-fA-F]+\)\s*(.+?)(?:\s*;|$)")
 _SKIP_LINES = {"mark_precise", "<|", "func#"}
+_VERIFIER_STATE = re.compile(r"^\s*\d+:\s*R\d+=")   # e.g. "0: R1=ctx() R10=fp0"
+_OPCODE_LINE = re.compile(r"^\s*\d+:\s*\(([0-9a-fA-F]{2})\)\s*(.+?)(?:\s*;|$)")
+_REG_RE = re.compile(r'[rw](\d+)')
+_INT_RE = re.compile(r'(-?\d+)')
+
+# Keep for debug logging (instruction count)
+_INST_PATTERN = re.compile(r"^\s*\d+:\s*\([0-9a-fA-F]+\)\s*(.+?)(?:\s*;|$)")
 _PC_GOTO = re.compile(r'\bgoto\s+pc([+-]\d+)')
 
 
@@ -84,6 +102,8 @@ def _parse_instructions(text: str) -> list[str]:
     for line in text.splitlines():
         line = line.strip()
         if not line or any(s in line for s in _SKIP_LINES):
+            continue
+        if _VERIFIER_STATE.match(line):
             continue
         m = _INST_PATTERN.match(line)
         inst = (m.group(1).strip() if m
@@ -94,33 +114,132 @@ def _parse_instructions(text: str) -> list[str]:
     return out
 
 
-def _compile_to_hex(assembly: str, tmpdir: str) -> str | None:
-    insns = _parse_instructions(assembly)
+def _pack_insn(code: int, dst: int, src: int, off: int, imm: int) -> bytes:
+    dst = dst & 0xf
+    src = src & 0xf
+    off = max(-32768, min(32767, off))
+    imm = max(-(2**31), min(2**31 - 1, imm))
+    return struct.pack('<BBhi', code, (src << 4) | dst, off, imm)
+
+
+def _reg(s: str) -> int:
+    m = _REG_RE.search(s)
+    return int(m.group(1)) if m else 0
+
+
+def _encode_insn(opcode: int, text: str) -> bytes | None:
+    text = text.strip()
+
+    if text == 'exit':
+        return _pack_insn(0x95, 0, 0, 0, 0)
+
+    # goto ±N
+    m = re.match(r'^goto\s+([+-]?\d+)$', text)
+    if m:
+        return _pack_insn(opcode, 0, 0, int(m.group(1)), 0)
+
+    # call N  or  call bpf_helper_name
+    m = re.match(r'^call\s+(.+)$', text)
+    if m:
+        arg = m.group(1).strip()
+        fn_id = int(arg) if re.match(r'^\d+$', arg) else 1
+        return _pack_insn(0x85, 0, 0, 0, fn_id)
+
+    # rD = *(uXX *)(rS ± OFF)   — load
+    m = re.match(r'^([rw]\d+)\s*=\s*\*\([^)]*\)\s*\(([rw]\d+)\s*([+-]\s*\d+)?\)$', text)
+    if m:
+        dst = _reg(m.group(1))
+        src = _reg(m.group(2))
+        off = int(m.group(3).replace(' ', '')) if m.group(3) else 0
+        return _pack_insn(opcode, dst, src, off, 0)
+
+    # *(uXX *)(rD ± OFF) = rS/IMM   — store
+    m = re.match(r'^\*\([^)]*\)\s*\(([rw]\d+)\s*([+-]\s*\d+)?\)\s*=\s*(.+)$', text)
+    if m:
+        dst = _reg(m.group(1))
+        off = int(m.group(2).replace(' ', '')) if m.group(2) else 0
+        rhs = m.group(3).strip()
+        if _REG_RE.match(rhs):
+            return _pack_insn(opcode, dst, _reg(rhs), off, 0)
+        imm_m = _INT_RE.search(rhs)
+        return _pack_insn(opcode, dst, 0, off, int(imm_m.group(1)) if imm_m else 0)
+
+    # if rD OP rS/IMM goto ±OFF   — conditional jump
+    m = re.match(r'^if\s+([rw]\d+)\s*[=!<>s]+\s*([rw]\d+|-?\d+)\s+goto\s+([+-]?\d+)$', text)
+    if m:
+        dst = _reg(m.group(1))
+        rhs = m.group(2)
+        off = int(m.group(3))
+        if _REG_RE.match(rhs):
+            return _pack_insn(opcode, dst, _reg(rhs), off, 0)
+        return _pack_insn(opcode, dst, 0, off, int(rhs))
+
+    # rD = rS   — register copy
+    m = re.match(r'^([rw]\d+)\s*=\s*([rw]\d+)$', text)
+    if m:
+        return _pack_insn(opcode, _reg(m.group(1)), _reg(m.group(2)), 0, 0)
+
+    # rD = IMM  or  rD = IMM ll   — immediate (treat wide as truncated 32-bit)
+    m = re.match(r'^([rw]\d+)\s*=\s*(-?\d+)', text)
+    if m:
+        return _pack_insn(opcode, _reg(m.group(1)), 0, 0, int(m.group(2)))
+
+    # rD OP= rS   — compound with register
+    m = re.match(r'^([rw]\d+)\s*(?:[+\-*/%|&^]|<<|>>|s>>)=\s*([rw]\d+)$', text)
+    if m:
+        return _pack_insn(opcode, _reg(m.group(1)), _reg(m.group(2)), 0, 0)
+
+    # rD OP= IMM   — compound with immediate
+    m = re.match(r'^([rw]\d+)\s*(?:[+\-*/%|&^]|<<|>>|s>>)=\s*(-?\d+)$', text)
+    if m:
+        return _pack_insn(opcode, _reg(m.group(1)), 0, 0, int(m.group(2)))
+
+    # rD = -rD   — negate
+    m = re.match(r'^([rw]\d+)\s*=\s*-([rw]\d+)$', text)
+    if m:
+        return _pack_insn(opcode, _reg(m.group(1)), 0, 0, 0)
+
+    return None
+
+
+_EXIT_INSN = _pack_insn(0x95, 0, 0, 0, 0)
+
+
+def _encode_to_hex(assembly: str) -> str | None:
+    """Encode BPF assembly to raw bytecode hex without clang.
+
+    Trusts the opcode byte the model wrote; packs dst/src/off/imm directly.
+    Programs the assembler would reject still reach the verifier.
+    """
+    insns: list[bytes] = []
+
+    for line in assembly.splitlines():
+        line = line.strip()
+        if not line or any(s in line for s in _SKIP_LINES):
+            continue
+        if _VERIFIER_STATE.match(line):
+            continue
+
+        m = _OPCODE_LINE.match(line)
+        if not m:
+            # Handle bare "exit" with no opcode annotation
+            if line.split(";")[0].strip() == "exit":
+                insns.append(_EXIT_INSN)
+            continue
+
+        opcode = int(m.group(1), 16)
+        encoded = _encode_insn(opcode, m.group(2))
+        if encoded is not None:
+            insns.append(encoded)
+        # Permissive: unparseable instructions are skipped, not fatal
+
     if not insns:
         return None
 
-    src = ".section prog\n.globl main\nmain:\n" + "\n".join(f"    {i}" for i in insns)
-    if not any("exit" in i.lower() for i in insns):
-        src += "\n    r0 = 0\n    exit"
+    if insns[-1] != _EXIT_INSN:
+        insns.append(_EXIT_INSN)
 
-    asm_f = os.path.join(tmpdir, "prog.s")
-    elf_f = os.path.join(tmpdir, "prog.o")
-    bin_f = os.path.join(tmpdir, "prog.bin")
-
-    with open(asm_f, "w") as f:
-        f.write(src)
-    try:
-        subprocess.run(["clang", "-target", "bpf", "-c", asm_f, "-o", elf_f],
-                       check=True, capture_output=True)
-        subprocess.run(["llvm-objcopy", "--dump-section", f"prog={bin_f}", elf_f, "/dev/null"],
-                       check=True, capture_output=True)
-    except subprocess.CalledProcessError:
-        return None
-
-    if not os.path.exists(bin_f) or os.path.getsize(bin_f) == 0:
-        return None
-    with open(bin_f, "rb") as f:
-        return f.read().hex()
+    return b"".join(insns).hex()
 
 
 # ---------------------------------------------------------------------------
@@ -160,32 +279,45 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     global _pc_set, _call_count
 
     rewards: list[float] = []
+    batch_id = _call_count
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for assembly in completions:
-            hex_str = _compile_to_hex(assembly, tmpdir)
+    for i, assembly in enumerate(completions):
+        preview = assembly[:120].replace("\n", "\\n")
+        if batch_id < 3:
+            print(f"[REWARD DEBUG] batch={batch_id} i={i} raw={assembly[:200]!r}", flush=True)
+        insns = _parse_instructions(assembly)
+        hex_str = _encode_to_hex(assembly)
 
-            if not hex_str:
-                rewards.append(0.0)
-                continue
+        if not hex_str:
+            _log.debug("batch=%d i=%d ENCODE_FAIL insns=%d preview=%r",
+                       batch_id, i, len(insns), preview)
+            rewards.append(0.0)
+            continue
 
-            result = _validate_on_vm(hex_str, ssh)
+        result = _validate_on_vm(hex_str, ssh)
 
-            if result is None:
-                _watchdog(ssh)
-                rewards.append(2.0)
-                continue
+        if result is None:
+            _log.debug("batch=%d i=%d SSH_TIMEOUT hex_len=%d", batch_id, i, len(hex_str))
+            _watchdog(ssh)
+            rewards.append(2.0)
+            continue
 
-            verdict = result.get("verdict", "ERRORE")
+        verdict = result.get("verdict", "ERRORE")
 
-            if verdict == "RIFIUTATO":
-                rewards.append(0.1)
-            elif verdict == "ACCETTATO":
-                new_pcs = set(result.get("pcs", [])) - _pc_set
-                _pc_set.update(new_pcs)
-                rewards.append(1.0 if new_pcs else 0.4)
-            else:
-                rewards.append(0.0)
+        if verdict == "RIFIUTATO":
+            _log.debug("batch=%d i=%d RIFIUTATO insns=%d", batch_id, i, len(insns))
+            rewards.append(0.1)
+        elif verdict == "ACCETTATO":
+            new_pcs = set(result.get("pcs", [])) - _pc_set
+            _pc_set.update(new_pcs)
+            r = 1.0 if new_pcs else 0.1
+            _log.debug("batch=%d i=%d ACCETTATO new_pcs=%d reward=%.1f",
+                       batch_id, i, len(new_pcs), r)
+            rewards.append(r)
+        else:
+            _log.debug("batch=%d i=%d ERRORE verdict=%r insns=%d preview=%r",
+                       batch_id, i, verdict, len(insns), preview)
+            rewards.append(0.0)
 
     _call_count += 1
     if _call_count % 100 == 0:
