@@ -104,9 +104,9 @@ results/                # Pass-rate CSVs, reward logs, sanity check reports
 
 | Artifact | Location |
 |---|---|
-| SFT dataset (`dataset_final_qwen.jsonl`) | HuggingFace — link TBD |
-| SFT adapter (`curated_3ep`) | HuggingFace — link TBD |
-| Merged SFT model (`curated_merged`) | HuggingFace — link TBD |
+| SFT dataset (`dataset_final_qwen.jsonl`) | [Strhata/ebpf-corpus](https://huggingface.co/datasets/Strhata/ebpf-corpus) |
+| SFT adapter (`curated_3ep_final`) | [Strhata/ebpf-checkpoints](https://huggingface.co/Strhata/ebpf-checkpoints/tree/main/curated_3ep_final) |
+| Merged SFT model (`curated_merged`) | [Strhata/ebpf-checkpoints](https://huggingface.co/Strhata/ebpf-checkpoints/tree/main/curated_merged) |
 | RL checkpoint (`rl_grpo_v2`) | Local only (in progress) |
 
 ---
