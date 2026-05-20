@@ -40,6 +40,9 @@ wandb/
 # Scratch / planning docs
 .scratch/
 
+# Claude Code
+CLAUDE.md
+
 # Misc
 *.pid
 *.log
