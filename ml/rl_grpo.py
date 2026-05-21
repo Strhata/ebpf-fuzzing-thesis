@@ -181,7 +181,7 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
 
     def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
         if smoke_test:
-            return [0.4] * len(completions)
+            return [0.2] * len(completions)
 
         call_id = _call[0]
         _call[0] += 1
@@ -202,7 +202,7 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
                 "cumulative_pcs": len(rw._pc_set),
                 "tier/compile_fail": rewards.count(0.0),
                 "tier/rejected": rewards.count(0.1),
-                "tier/valid": rewards.count(0.4),
+                "tier/valid": rewards.count(0.2),
                 "tier/new_pcs": rewards.count(1.0),
                 "tier/crash": rewards.count(2.0),
             }, commit=False)

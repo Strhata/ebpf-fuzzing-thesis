@@ -64,31 +64,31 @@ class TestRewardTiers(unittest.TestCase):
     def test_rejected_returns_point_one(self):
         rw = self._rw()
         ssh = _mock_ssh("RIFIUTATO")
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rewards, [0.1])
 
     def test_valid_new_pcs_returns_one(self):
         rw = self._rw()
         ssh = _mock_ssh("ACCETTATO", pcs=[0x1000, 0x1001])
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rewards, [1.0])
         self.assertEqual(rw._pc_set, {0x1000, 0x1001})
 
-    def test_valid_no_new_pcs_returns_point_four(self):
+    def test_valid_no_new_pcs_returns_point_two(self):
         rw = self._rw()
         rw._pc_set = {0x1000, 0x1001}
         ssh = _mock_ssh("ACCETTATO", pcs=[0x1000, 0x1001])
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertEqual(rewards, [0.4])
+        self.assertEqual(rewards, [0.2])
 
     def test_ssh_timeout_returns_crash_reward(self):
         rw = self._rw()
         ssh = MagicMock()
         ssh.run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=30)
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"), \
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"), \
              patch.object(rw, "_watchdog") as mock_watchdog:
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rewards, [2.0])
@@ -97,16 +97,16 @@ class TestRewardTiers(unittest.TestCase):
     def test_accettato_not_treated_as_errore(self):
         rw = self._rw()
         ssh = _mock_ssh("ACCETTATO", pcs=[0x5555])
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertIn(rewards[0], (0.4, 1.0))
+        self.assertIn(rewards[0], (0.2, 1.0))
         self.assertNotEqual(rewards[0], 0.0)
 
     def test_pc_set_grows_across_calls(self):
         rw = self._rw()
         ssh1 = _mock_ssh("ACCETTATO", pcs=[0xA])
         ssh2 = _mock_ssh("ACCETTATO", pcs=[0xB])
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh1)
             rw.compute_rewards([_VALID_ASM], ssh2)
         self.assertIn(0xA, rw._pc_set)
@@ -117,7 +117,7 @@ class TestRewardTiers(unittest.TestCase):
         rw._pc_set = {0x42}
         rw._call_count = 99
         ssh = _mock_ssh("ACCETTATO", pcs=[0x43])
-        with patch.object(rw, "_compile_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertTrue(Path(self._pc_path).exists(), "PC set file not written at call 100")
         with open(self._pc_path) as f:

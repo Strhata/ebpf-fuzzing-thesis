@@ -7,7 +7,7 @@ Public interface:
 Reward tiers:
     crash        → 2.0  (SSH timeout; VM may have crashed, coverage frontier signal)
     new_pcs      → 1.0  (ACCETTATO + at least 1 PC not seen before)
-    valid        → 0.1  (ACCETTATO, no new PCs)
+    valid        → 0.2  (ACCETTATO, no new PCs)
     rejected     → 0.1  (RIFIUTATO by BPF verifier)
     encode_fail  → 0.0  (no parseable instructions)
 """
@@ -310,7 +310,7 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
         elif verdict == "ACCETTATO":
             new_pcs = set(result.get("pcs", [])) - _pc_set
             _pc_set.update(new_pcs)
-            r = 1.0 if new_pcs else 0.1
+            r = 1.0 if new_pcs else 0.2
             _log.debug("batch=%d i=%d ACCETTATO new_pcs=%d reward=%.1f",
                        batch_id, i, len(new_pcs), r)
             rewards.append(r)
