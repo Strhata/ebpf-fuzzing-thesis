@@ -121,17 +121,20 @@ func validate(hexStr string) result {
 	if loadErr != nil {
 		var ve *ebpf.VerifierError
 		if errors.As(loadErr, &ve) {
-			return result{Verdict: "RIFIUTATO", PCs: []uint64{}}
+			return result{Verdict: "RIFIUTATO", PCs: readPCs(cover)}
 		}
 		return result{Verdict: "ERRORE", PCs: []uint64{}}
 	}
 	prog.Close()
+	return result{Verdict: "ACCETTATO", PCs: readPCs(cover)}
+}
 
+func readPCs(cover []uint64) []uint64 {
 	n := cover[0]
 	if n > coverSize-1 {
 		n = coverSize - 1
 	}
 	pcs := make([]uint64, n)
 	copy(pcs, cover[1:n+1])
-	return result{Verdict: "ACCETTATO", PCs: pcs}
+	return pcs
 }
