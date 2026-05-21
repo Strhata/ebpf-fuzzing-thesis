@@ -6,14 +6,17 @@ Starts from checkpoints/curated_merged/ (merged SFT model) and fine-tunes
 with GRPO using KCOV-based rewards from the eval VM.
 
 Usage:
-    pixi run python ml/rl_grpo.py                         # full training
-    pixi run python ml/rl_grpo.py --smoke-test            # 10 steps, mock reward
-    pixi run python ml/rl_grpo.py --resume-from checkpoints/rl_grpo/checkpoint-200
+    pixi run python ml/rl_grpo.py                              # full training (local reward)
+    pixi run python ml/rl_grpo.py --smoke-test                 # 10 steps, mock reward
+    pixi run python ml/rl_grpo.py --resume                     # auto-resume from last checkpoint
+    pixi run python ml/rl_grpo.py --remote-reward-url URL      # remote reward server (Colab)
 """
 
 import argparse
 import logging
+import os
 import sys
+import time
 from pathlib import Path
 
 _REPO_ROOT_GRPO = Path(__file__).parent.parent
@@ -34,11 +37,12 @@ import trl.import_utils as _trl_utils
 _trl_utils.is_vllm_available = lambda: False
 
 import re
-import time
 import datetime
 
+import requests
 import torch
 from transformers import BitsAndBytesConfig, TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers.trainer_utils import get_last_checkpoint
 import wandb
 from datasets import Dataset
 from peft import LoraConfig
@@ -166,6 +170,53 @@ class SanityCheckCallback(TrainerCallback):
         return counts
 
 
+def _make_remote_reward_fn(base_url: str, api_key: str):
+    """Return a reward function that calls the remote reward server over HTTP.
+
+    Retries with exponential backoff for up to 5 minutes on any network error.
+    """
+    endpoint = base_url.rstrip("/") + "/rewards"
+    headers = {"X-API-Key": api_key}
+
+    def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
+        payload = {"completions": completions}
+        deadline = time.time() + 300  # 5 minutes
+        delay = 5
+        while True:
+            try:
+                resp = requests.post(endpoint, json=payload, headers=headers, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as exc:
+                if time.time() + delay > deadline:
+                    raise RuntimeError(
+                        f"Reward server unreachable after 5 minutes: {exc}"
+                    ) from exc
+                print(f"[WARN] Reward server error ({exc}), retrying in {delay}s…", flush=True)
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+
+        rewards: list[float] = data["rewards"]
+
+        if wandb.run is not None:
+            total_pcs = data.get("total_pcs_per_program", [])
+            wandb.log({
+                "reward/mean": sum(rewards) / max(1, len(rewards)),
+                "reward/max": max(rewards) if rewards else 0.0,
+                "cumulative_pcs": data.get("cumulative_pcs", 0),
+                "depth/mean": sum(total_pcs) / max(1, len(total_pcs)),
+                "depth/max": data.get("max_pcs_seen", 0),
+                "tier/encode_fail": sum(1 for r in rewards if r == 0.0),
+                "tier/crash": sum(1 for r in rewards if r == 2.0),
+                "tier/new_pcs": sum(1 for r in rewards if r > 1.0),
+            }, commit=False)
+
+        return rewards
+
+    return reward_fn
+
+
 _PROMPT = "Kernel: unknown | Status: VALID\n### ASSEMBLY:\n"
 
 
@@ -175,8 +226,6 @@ def _build_dataset(n: int) -> Dataset:
 
 def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
     """Return reward function with signature (prompts, completions, **kw) -> list[float]."""
-    _state = {"prev_pc_count": len(rw._pc_set)}
-
     _call = [0]
 
     def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
@@ -193,18 +242,16 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
         rewards = rw.compute_rewards(completions, ssh)
 
         if wandb.run is not None:
-            n_new = len(rw._pc_set) - _state["prev_pc_count"]
-            _state["prev_pc_count"] = len(rw._pc_set)
+            pcs = rw._last_pcs_per_program
             wandb.log({
                 "reward/mean": sum(rewards) / len(rewards),
                 "reward/max": max(rewards),
-                "new_pcs": n_new,
                 "cumulative_pcs": len(rw._pc_set),
-                "tier/compile_fail": rewards.count(0.0),
-                "tier/rejected": rewards.count(0.1),
-                "tier/valid": rewards.count(0.2),
-                "tier/new_pcs": rewards.count(1.0),
-                "tier/crash": rewards.count(2.0),
+                "depth/mean": sum(pcs) / max(1, len(pcs)),
+                "depth/max": rw._max_pcs_seen,
+                "tier/encode_fail": sum(1 for r in rewards if r == 0.0),
+                "tier/crash": sum(1 for r in rewards if r == 2.0),
+                "tier/new_pcs": sum(1 for r in rewards if r > 1.0),
             }, commit=False)
 
         return rewards
@@ -221,7 +268,14 @@ def main():
     ap.add_argument("--model", default=str(_REPO_ROOT / "checkpoints" / "curated_merged"),
                     help="Path to base model (merged bf16 SFT checkpoint)")
     ap.add_argument("--output-dir", default=str(_REPO_ROOT / "checkpoints" / "rl_grpo"))
-    ap.add_argument("--resume-from", default=None, help="Resume from checkpoint path")
+    ap.add_argument("--resume", action="store_true",
+                    help="Auto-resume from latest checkpoint in output-dir and continue WandB run")
+    ap.add_argument("--run-name", default="grpo-rl-v1",
+                    help="WandB run name (default: grpo-rl-v1)")
+    ap.add_argument("--remote-reward-url", default=None,
+                    help="Base URL of reward server (e.g. https://xxx.trycloudflare.com). "
+                         "When set, reward.py and SSH are not used. "
+                         "API key read from REWARD_API_KEY env var.")
     ap.add_argument("--vm-host", default="localhost")
     ap.add_argument("--vm-port", type=int, default=10022)
     ap.add_argument("--vm-key", default=str(Path.home() / "fuzzing_lab" / "trixie.id_rsa"))
@@ -237,8 +291,7 @@ def main():
                     help="Seconds between sanity checks (default 1h; 0 = disabled)")
     args = ap.parse_args()
 
-    ssh = rw.SSHClient(host=args.vm_host, port=args.vm_port, key=args.vm_key)
-
+    remote = args.remote_reward_url
     if args.smoke_test:
         n_steps = 10
         n_generations = 2
@@ -248,6 +301,25 @@ def main():
         n_steps = args.max_steps
         n_generations = args.num_generations
         n_dataset = 10_000
+
+    # WandB run continuity: set env vars before GRPOTrainer initialises wandb.
+    run_id_file = Path(args.output_dir) / "wandb_run_id.txt"
+    if args.resume and run_id_file.exists() and not args.smoke_test:
+        run_id = run_id_file.read_text().strip()
+        os.environ["WANDB_RUN_ID"] = run_id
+        os.environ["WANDB_RESUME"] = "must"
+        print(f"[*] Resuming WandB run {run_id}")
+
+    # Checkpoint auto-detection.
+    resume_checkpoint = None
+    if args.resume:
+        resume_checkpoint = get_last_checkpoint(args.output_dir)
+        if resume_checkpoint:
+            print(f"[*] Resuming from checkpoint {resume_checkpoint}")
+        else:
+            print(f"[*] --resume: no checkpoint found in {args.output_dir}, starting fresh")
+
+    ssh = rw.SSHClient(host=args.vm_host, port=args.vm_port, key=args.vm_key)
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -278,7 +350,7 @@ def main():
 
     grpo_config = GRPOConfig(
         output_dir=args.output_dir,
-        run_name="grpo-smoke-test" if args.smoke_test else "grpo-rl-v1",
+        run_name="grpo-smoke-test" if args.smoke_test else args.run_name,
         num_generations=n_generations,
         max_prompt_length=64,
         max_completion_length=args.max_completion_length,
@@ -298,10 +370,18 @@ def main():
     )
 
     dataset = _build_dataset(n_dataset)
-    reward_fn = _make_reward_fn(ssh, smoke_test=args.smoke_test)
+
+    if remote and not args.smoke_test:
+        api_key = os.environ.get("REWARD_API_KEY", "")
+        if not api_key:
+            raise SystemExit("REWARD_API_KEY env var is required with --remote-reward-url")
+        reward_fn = _make_remote_reward_fn(remote, api_key)
+        print(f"[*] Remote reward: {remote}")
+    else:
+        reward_fn = _make_reward_fn(ssh, smoke_test=args.smoke_test)
 
     callbacks = []
-    if not args.smoke_test and args.sanity_interval > 0:
+    if not args.smoke_test and not remote and args.sanity_interval > 0:
         callbacks.append(SanityCheckCallback(ssh, interval_secs=args.sanity_interval))
         print(f"[*] Sanity check every {args.sanity_interval}s → results/sanity_checks.log")
 
@@ -314,14 +394,17 @@ def main():
         callbacks=callbacks or None,
     )
 
-    if args.resume_from:
-        print(f"[*] Resuming from {args.resume_from}")
-        rw._load_pc_set()
+    # Write WandB run ID for new runs so --resume can restore continuity later.
+    if not args.smoke_test and wandb.run and not run_id_file.exists():
+        run_id_file.parent.mkdir(parents=True, exist_ok=True)
+        run_id_file.write_text(wandb.run.id)
+        print(f"[*] WandB run ID saved to {run_id_file}")
 
-    trainer.train(resume_from_checkpoint=args.resume_from)
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
 
-    rw.save_pc_set()
     trainer.save_model()
+    if not remote:
+        rw.save_pc_set()
     print(f"[+] Done. Checkpoints in {args.output_dir}")
     if args.smoke_test:
         print("[smoke-test] PASSED")
