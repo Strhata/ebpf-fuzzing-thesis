@@ -16,8 +16,9 @@ the model checkpoint is safe on Google Drive. This guide gets training back in ~
 - [ ] Google Drive folder exists: `My Drive/grpo-depth-reward-v1/`
 - [ ] Colab secrets set: `GITHUB_TOKEN`, `WANDB_API_KEY`, `REWARD_API_KEY`, `REWARD_SERVER_URL`
 - [ ] Local reward server running (`tmux` session `reward-server` on local machine)
-- [ ] Cloudflare **named tunnel** running (`tmux` session `cf-tunnel` on local machine)
-  — named tunnels have a stable subdomain; `REWARD_SERVER_URL` does not change across restarts
+- [ ] Cloudflare Quick Tunnel running (`tmux` session `reward-tunnel` on local machine)
+  — URL is stable while `cloudflared` is running; only changes on machine reboot
+  — see `docs/cloudflare_tunnel_setup.md` for setup and reboot recovery
 
 ---
 
@@ -87,8 +88,9 @@ curl -s -o /dev/null -w "%{http_code}" -H "X-API-Key: $REWARD_API_KEY" \
   "$REWARD_SERVER_URL/rewards" -d '{"completions":["test"]}'
 ```
 
-The named tunnel URL is stable — if the tunnel session is alive the URL has not
-changed and `REWARD_SERVER_URL` does not need updating.
+The Quick Tunnel URL is stable as long as `cloudflared` is running — if the
+`reward-tunnel` tmux session is alive the URL has not changed and `REWARD_SERVER_URL`
+does not need updating. Only a machine reboot changes the URL.
 
 ### 7 — Close the browser
 
