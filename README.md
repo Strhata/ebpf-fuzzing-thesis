@@ -12,13 +12,14 @@ coverage of the Linux BPF verifier, measured via kernel KCOV instrumentation.
 Data collection → SFT → RL (GRPO) → Coverage evaluation
 ```
 
-### Current state (2026-05-18)
+### Current state (2026-05-21)
 
 | Phase | Status | Key result |
 |---|---|---|
 | Data collection | ✅ Done | ~2M programs via modified buzzer, 27k curated |
 | SFT (Qwen2.5-Coder-1.5B) | ✅ Done | **60% verifier pass-rate** (vs 1% zero-shot) |
-| GRPO RL training | 🟡 Running | Step ~740/30000, 9 new PCs found so far |
+| GRPO RL run 1 (beta=0.01) | ✅ Done | **138 new verifier PCs** discovered in 8370 steps; plateau from step ~1300 due to reward signal collapse |
+| GRPO RL run 2 (beta=0.1) | 🟡 Planned | Colab Pro, depth-based reward redesign |
 
 ---
 
