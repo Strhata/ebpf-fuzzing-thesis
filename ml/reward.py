@@ -37,6 +37,7 @@ _log = logging.getLogger("reward")
 _pc_set: set[int] = set()
 _max_pcs_seen: int = 1
 _call_count: int = 0
+_last_pcs_per_program: list[int] = []  # populated by compute_rewards; read by reward_server
 
 
 def _load_pc_set() -> None:
@@ -296,9 +297,10 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     Snapshot of _pc_set is taken before the batch so all completions compare
     against the same frontier regardless of evaluation order within the batch.
     """
-    global _pc_set, _max_pcs_seen, _call_count
+    global _pc_set, _max_pcs_seen, _call_count, _last_pcs_per_program
 
     rewards: list[float] = []
+    pcs_per_program: list[int] = []
     batch_id = _call_count
     pc_set_snapshot = frozenset(_pc_set)
 
@@ -313,6 +315,7 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
             _log.debug("batch=%d i=%d ENCODE_FAIL insns=%d preview=%r",
                        batch_id, i, len(insns), preview)
             rewards.append(0.0)
+            pcs_per_program.append(0)
             continue
 
         result = _validate_on_vm(hex_str, ssh)
@@ -321,6 +324,7 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
             _log.debug("batch=%d i=%d SSH_TIMEOUT hex_len=%d", batch_id, i, len(hex_str))
             _watchdog(ssh)
             rewards.append(2.0)
+            pcs_per_program.append(0)
             continue
 
         verdict = result.get("verdict", "ERRORE")
@@ -328,6 +332,7 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
             _log.debug("batch=%d i=%d ERRORE insns=%d preview=%r",
                        batch_id, i, len(insns), preview)
             rewards.append(0.0)
+            pcs_per_program.append(0)
             continue
 
         total_pcs = set(result.get("pcs", []))
@@ -344,7 +349,9 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
         _log.debug("batch=%d i=%d %s pcs=%d new=%d depth_r=%.3f reward=%.3f",
                    batch_id, i, verdict, len(total_pcs), len(new_pcs), depth_component, r)
         rewards.append(r)
+        pcs_per_program.append(len(total_pcs))
 
+    _last_pcs_per_program = pcs_per_program
     _call_count += 1
     if _call_count % 100 == 0:
         save_pc_set()

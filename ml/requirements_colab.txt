@@ -1,0 +1,10 @@
+# Colab training-side dependencies for rl_grpo.py --remote-reward-url
+# torch is pre-installed on Colab runtimes; not listed here.
+transformers>=4.40.0
+trl>=0.9.0,<0.15
+peft>=0.10.0
+accelerate>=0.28.0
+bitsandbytes>=0.43.0
+wandb>=0.16.0
+huggingface_hub>=0.23.0
+requests>=2.31.0
