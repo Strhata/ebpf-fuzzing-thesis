@@ -4,12 +4,14 @@ reward.py — RL reward function for GRPO training.
 Public interface:
     compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]
 
-Reward tiers:
-    crash        → 2.0  (SSH timeout; VM may have crashed, coverage frontier signal)
-    new_pcs      → 1.0  (ACCETTATO + at least 1 PC not seen before)
-    valid        → 0.2  (ACCETTATO, no new PCs)
-    rejected     → 0.1  (RIFIUTATO by BPF verifier)
+Reward formula (verdict-blind, depth-based):
+    depth_component = min(0.5, len(pcs) / max_pcs_seen * 0.5)
+    discovery_bonus = 1.0 if any PC not in pre-batch global set snapshot
+    reward          = depth_component + discovery_bonus
+
+Special cases:
     encode_fail  → 0.0  (no parseable instructions)
+    crash        → 2.0  (SSH timeout; VM may have crashed)
 """
 
 import json
@@ -22,6 +24,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
 _PC_SET_PATH = _REPO_ROOT / "results" / "rl_pc_set.json"
+_MAX_PCS_SEEN_PATH = _REPO_ROOT / "results" / "rl_max_pcs_seen.json"
 _DEBUG_LOG = _REPO_ROOT / "results" / "reward_debug.log"
 
 logging.basicConfig(
@@ -32,6 +35,7 @@ logging.basicConfig(
 _log = logging.getLogger("reward")
 
 _pc_set: set[int] = set()
+_max_pcs_seen: int = 1
 _call_count: int = 0
 
 
@@ -48,7 +52,21 @@ def save_pc_set() -> None:
         json.dump(list(_pc_set), f)
 
 
+def _load_max_pcs_seen() -> None:
+    global _max_pcs_seen
+    if _MAX_PCS_SEEN_PATH.exists():
+        with _MAX_PCS_SEEN_PATH.open() as f:
+            _max_pcs_seen = max(1, int(json.load(f)))
+
+
+def _save_max_pcs_seen() -> None:
+    _MAX_PCS_SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _MAX_PCS_SEEN_PATH.open("w") as f:
+        json.dump(_max_pcs_seen, f)
+
+
 _load_pc_set()
+_load_max_pcs_seen()
 
 
 # ---------------------------------------------------------------------------
@@ -274,12 +292,15 @@ def _validate_on_vm(hex_str: str, ssh: SSHClient) -> dict | None:
 def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     """Compute KCOV-based RL rewards for a batch of generated assembly programs.
 
-    Updates the global PC set in place; writes it to disk every 100 calls.
+    Verdict-blind: RIFIUTATO and ACCETTATO programs are both rewarded by depth.
+    Snapshot of _pc_set is taken before the batch so all completions compare
+    against the same frontier regardless of evaluation order within the batch.
     """
-    global _pc_set, _call_count
+    global _pc_set, _max_pcs_seen, _call_count
 
     rewards: list[float] = []
     batch_id = _call_count
+    pc_set_snapshot = frozenset(_pc_set)
 
     for i, assembly in enumerate(completions):
         preview = assembly[:120].replace("\n", "\\n")
@@ -303,24 +324,30 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
             continue
 
         verdict = result.get("verdict", "ERRORE")
-
-        if verdict == "RIFIUTATO":
-            _log.debug("batch=%d i=%d RIFIUTATO insns=%d", batch_id, i, len(insns))
-            rewards.append(0.1)
-        elif verdict == "ACCETTATO":
-            new_pcs = set(result.get("pcs", [])) - _pc_set
-            _pc_set.update(new_pcs)
-            r = 1.0 if new_pcs else 0.2
-            _log.debug("batch=%d i=%d ACCETTATO new_pcs=%d reward=%.1f",
-                       batch_id, i, len(new_pcs), r)
-            rewards.append(r)
-        else:
-            _log.debug("batch=%d i=%d ERRORE verdict=%r insns=%d preview=%r",
-                       batch_id, i, verdict, len(insns), preview)
+        if verdict == "ERRORE":
+            _log.debug("batch=%d i=%d ERRORE insns=%d preview=%r",
+                       batch_id, i, len(insns), preview)
             rewards.append(0.0)
+            continue
+
+        total_pcs = set(result.get("pcs", []))
+        new_pcs = total_pcs - pc_set_snapshot
+        _pc_set.update(total_pcs)
+
+        depth_component = min(0.5, len(total_pcs) / _max_pcs_seen * 0.5)
+        discovery_bonus = 1.0 if new_pcs else 0.0
+        r = depth_component + discovery_bonus
+
+        if len(total_pcs) > _max_pcs_seen:
+            _max_pcs_seen = len(total_pcs)
+
+        _log.debug("batch=%d i=%d %s pcs=%d new=%d depth_r=%.3f reward=%.3f",
+                   batch_id, i, verdict, len(total_pcs), len(new_pcs), depth_component, r)
+        rewards.append(r)
 
     _call_count += 1
     if _call_count % 100 == 0:
         save_pc_set()
+        _save_max_pcs_seen()
 
     return rewards

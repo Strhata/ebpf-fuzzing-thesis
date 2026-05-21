@@ -1,8 +1,7 @@
-"""Unit tests for ml/reward.py (all 5 reward tiers + PC set persistence)."""
+"""Unit tests for ml/reward.py — depth-based verdict-blind reward formula."""
 
 import json
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,15 +14,19 @@ _ML_DIR = Path(__file__).parent.parent / "ml"
 _REWARD_PATH = _ML_DIR / "reward.py"
 
 
-def _fresh_reward(pc_set_path: str = ""):
-    """Return a freshly-imported reward module with an empty PC set."""
+def _fresh_reward(pc_set_path: str = "", max_pcs_seen_path: str = ""):
+    """Return a freshly-imported reward module with isolated state."""
     spec = importlib.util.spec_from_file_location("reward", _REWARD_PATH)
     rw = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rw)
-    rw._pc_set = set()  # isolate from results/rl_pc_set.json on disk
+    rw._pc_set = set()       # isolate from results/rl_pc_set.json on disk
+    rw._max_pcs_seen = 1     # isolate from results/rl_max_pcs_seen.json on disk
     if pc_set_path:
         rw._PC_SET_PATH = Path(pc_set_path)
         rw._load_pc_set()
+    if max_pcs_seen_path:
+        rw._MAX_PCS_SEEN_PATH = Path(max_pcs_seen_path)
+        rw._load_max_pcs_seen()
     return rw
 
 
@@ -37,20 +40,22 @@ def _mock_ssh(verdict: str, pcs: list[int] | None = None) -> MagicMock:
     """Return an SSHClient mock that returns the given verdict."""
     client = MagicMock()
     payload = json.dumps({"verdict": verdict, "pcs": pcs or []})
-    # rc=0 for ACCETTATO, rc=1 for RIFIUTATO
     rc = 0 if verdict == "ACCETTATO" else 1
     client.run.return_value = (rc, payload, "")
     return client
 
 
-class TestRewardTiers(unittest.TestCase):
+class TestRewardFormula(unittest.TestCase):
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()
         self._pc_path = str(Path(self._tmpdir) / "rl_pc_set.json")
+        self._max_pcs_path = str(Path(self._tmpdir) / "rl_max_pcs_seen.json")
 
     def _rw(self):
-        return _fresh_reward(self._pc_path)
+        return _fresh_reward(self._pc_path, self._max_pcs_path)
+
+    # --- special cases (unchanged from v1) ---
 
     def test_compile_fail_returns_zero(self):
         rw = self._rw()
@@ -58,29 +63,6 @@ class TestRewardTiers(unittest.TestCase):
         rewards = rw.compute_rewards([_BAD_ASM], ssh)
         self.assertEqual(rewards, [0.0])
         ssh.run.assert_not_called()
-
-    def test_rejected_returns_point_one(self):
-        rw = self._rw()
-        ssh = _mock_ssh("RIFIUTATO")
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
-            rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertEqual(rewards, [0.1])
-
-    def test_valid_new_pcs_returns_one(self):
-        rw = self._rw()
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x1000, 0x1001])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
-            rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertEqual(rewards, [1.0])
-        self.assertEqual(rw._pc_set, {0x1000, 0x1001})
-
-    def test_valid_no_new_pcs_returns_point_two(self):
-        rw = self._rw()
-        rw._pc_set = {0x1000, 0x1001}
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x1000, 0x1001])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
-            rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertEqual(rewards, [0.2])
 
     def test_ssh_timeout_returns_crash_reward(self):
         rw = self._rw()
@@ -92,13 +74,96 @@ class TestRewardTiers(unittest.TestCase):
         self.assertEqual(rewards, [2.0])
         mock_watchdog.assert_called_once_with(ssh)
 
+    # --- depth component ---
+
+    def test_depth_scales_with_pcs(self):
+        cases = [(50, 0.25), (100, 0.5), (200, 0.5)]  # (n_pcs, expected_depth)
+        for n_pcs, expected in cases:
+            with self.subTest(n_pcs=n_pcs):
+                rw = self._rw()
+                rw._max_pcs_seen = 100
+                pcs = list(range(n_pcs))
+                rw._pc_set = set(pcs)  # pre-seed so no discovery bonus
+                ssh = _mock_ssh("ACCETTATO", pcs=pcs)
+                with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+                    rewards = rw.compute_rewards([_VALID_ASM], ssh)
+                self.assertAlmostEqual(rewards[0], expected, places=5)
+
+    def test_max_pcs_seen_initialises_to_one(self):
+        rw = self._rw()
+        self.assertEqual(rw._max_pcs_seen, 1)
+
+    def test_max_pcs_seen_updates_on_record(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 10
+        ssh = _mock_ssh("ACCETTATO", pcs=list(range(25)))
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertEqual(rw._max_pcs_seen, 25)
+
+    def test_max_pcs_seen_does_not_decrease(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 50
+        ssh = _mock_ssh("ACCETTATO", pcs=list(range(10)))
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertEqual(rw._max_pcs_seen, 50)
+
+    # --- discovery bonus ---
+
+    def test_discovery_bonus_fires_on_new_pc(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 10
+        ssh = _mock_ssh("ACCETTATO", pcs=[0x9999])
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        depth = min(0.5, 1 / 10 * 0.5)
+        self.assertAlmostEqual(rewards[0], depth + 1.0)
+
+    def test_discovery_bonus_zero_no_new_pcs(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 10
+        rw._pc_set = {0x9999}
+        ssh = _mock_ssh("ACCETTATO", pcs=[0x9999])
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        depth = min(0.5, 1 / 10 * 0.5)
+        self.assertAlmostEqual(rewards[0], depth)
+
+    def test_within_batch_snapshot(self):
+        # Both completions in one call return the same new PC.
+        # Both should earn the discovery bonus because the pc_set snapshot
+        # is taken before either completion is evaluated.
+        rw = self._rw()
+        rw._max_pcs_seen = 10
+        ssh = _mock_ssh("ACCETTATO", pcs=[0x1000])
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
+        depth = min(0.5, 1 / 10 * 0.5)
+        self.assertEqual(len(rewards), 2)
+        self.assertAlmostEqual(rewards[0], depth + 1.0)
+        self.assertAlmostEqual(rewards[1], depth + 1.0)
+
+    # --- verdict-blind behaviour ---
+
+    def test_rifiutato_gets_depth_reward(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 10
+        ssh = _mock_ssh("RIFIUTATO", pcs=[0x1000, 0x1001])
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        depth = min(0.5, 2 / 10 * 0.5)
+        self.assertAlmostEqual(rewards[0], depth + 1.0)  # new pcs → discovery bonus
+        self.assertNotEqual(rewards[0], 0.1)             # old rejected tier is gone
+
     def test_accettato_not_treated_as_errore(self):
         rw = self._rw()
         ssh = _mock_ssh("ACCETTATO", pcs=[0x5555])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
-        self.assertIn(rewards[0], (0.2, 1.0))
-        self.assertNotEqual(rewards[0], 0.0)
+        self.assertGreater(rewards[0], 0.0)
+
+    # --- PC set persistence ---
 
     def test_pc_set_grows_across_calls(self):
         rw = self._rw()
@@ -123,12 +188,31 @@ class TestRewardTiers(unittest.TestCase):
         self.assertIn(0x42, saved)
         self.assertIn(0x43, saved)
 
+    def test_max_pcs_seen_written_on_cadence(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 5
+        rw._call_count = 99
+        ssh = _mock_ssh("ACCETTATO", pcs=list(range(8)))  # 8 pcs > 5
+        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+            rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertTrue(Path(self._max_pcs_path).exists(),
+                        "max_pcs_seen file not written at call 100")
+        with open(self._max_pcs_path) as f:
+            saved = int(json.load(f))
+        self.assertEqual(saved, 8)
+
     def test_pc_set_reloads_from_disk(self):
         pc_data = [0xDEAD, 0xBEEF]
         with open(self._pc_path, "w") as f:
             json.dump(pc_data, f)
-        rw = _fresh_reward(self._pc_path)
+        rw = _fresh_reward(self._pc_path, self._max_pcs_path)
         self.assertEqual(rw._pc_set, {0xDEAD, 0xBEEF})
+
+    def test_max_pcs_seen_reloads_from_disk(self):
+        with open(self._max_pcs_path, "w") as f:
+            json.dump(42, f)
+        rw = _fresh_reward(self._pc_path, self._max_pcs_path)
+        self.assertEqual(rw._max_pcs_seen, 42)
 
 
 if __name__ == "__main__":
