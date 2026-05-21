@@ -8,24 +8,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Run from repo root:   python ml/test_reward.py
-# or from ml/ dir:     python test_reward.py
-
 import importlib
 import importlib.util
 
-_ML_DIR = Path(__file__).parent
+_ML_DIR = Path(__file__).parent.parent / "ml"
 _REWARD_PATH = _ML_DIR / "reward.py"
 
 
 def _fresh_reward(pc_set_path: str = ""):
-    """Return a freshly-imported reward module with a custom PC set path."""
+    """Return a freshly-imported reward module with an empty PC set."""
     spec = importlib.util.spec_from_file_location("reward", _REWARD_PATH)
     rw = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rw)
+    rw._pc_set = set()  # isolate from results/rl_pc_set.json on disk
     if pc_set_path:
         rw._PC_SET_PATH = Path(pc_set_path)
-        rw._load_pc_set()  # re-run with the test path
+        rw._load_pc_set()
     return rw
 
 
