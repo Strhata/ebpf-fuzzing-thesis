@@ -4,7 +4,34 @@
 \chapter*{Sommario}
 \addcontentsline{toc}{chapter}{Sommario}
 
-\TODO{Incolla qui il sommario in italiano (massimo 200 parole).}
+eBPF (extended Berkeley Packet Filter) è diventato un componente fondamentale
+dei moderni sistemi Linux, consentendo l'esecuzione sicura e sandboxed di programmi
+utente all'interno del kernel per applicazioni di rete, osservabilità e sicurezza.
+Il verifier eBPF~--- il componente del kernel responsabile della garanzia di
+sicurezza dei programmi~--- rappresenta pertanto un obiettivo di alto valore:
+falle logiche nel verifier possono permettere a codice non privilegiato di uscire
+dalla sandbox e compromettere il sistema host.
+
+Questa tesi presenta una pipeline automatizzata per il fuzzing coverage-guided del
+verifier eBPF di Linux tramite un large language model (LLM) fine-tunato.
+A partire da circa 2 milioni di programmi eBPF raccolti al confine FFI del kernel
+mediante una versione modificata del fuzzer Buzzer, curiamo un dataset bilanciato
+di 27\,000 campioni distribuiti tra le classi di errore del verifier ed eseguiamo
+il fine-tuning di Qwen2.5-Coder-1.5B tramite QLoRA per generare assembly in
+formato verifier-log sintatticamente valido.
+Applichiamo poi l'apprendimento per rinforzo GRPO con un segnale di reward derivato
+dalla copertura del codice kernel (KCOV), addestrando il modello a esplorare
+percorsi del verifier più profondi e meno visitati.
+Una formulazione del reward verdict-blind e basata sulla profondità evita il
+problema di collasso del reward osservato quando programmi accettati e rifiutati
+vengono premiati in modo diverso.
+
+I risultati sperimentali mostrano che il modello fine-tunato migliora il pass-rate
+rispetto alla baseline zero-shot, e che la fase di training RL coverage-guided
+guida con successo l'esplorazione di nuovi percorsi del codice kernel.
+Il sistema dimostra che il fuzzing guidato da LLM è un approccio valido per la
+ricerca sulla sicurezza del verifier, e fornisce una pipeline open-source
+riproducibile per lavori futuri.
 
 \bigskip
 \noindent\textbf{Parole chiave:} eBPF, fuzzing, modelli linguistici di grandi dimensioni,
@@ -15,7 +42,31 @@ apprendimento per rinforzo, copertura del codice kernel, KCOV, GRPO.
 \chapter*{Abstract}
 \addcontentsline{toc}{chapter}{Abstract}
 
-\TODO{Paste English abstract here (maximum 200 words).}
+eBPF (extended Berkeley Packet Filter) has become a cornerstone of modern Linux
+systems, enabling safe, sandboxed execution of user-supplied programs inside the
+kernel for networking, observability, and security applications.
+The eBPF verifier~--- the kernel component responsible for guaranteeing program
+safety~--- is therefore a high-value target: logical flaws in the verifier can
+allow unprivileged code to escape the sandbox and compromise the host system.
+
+This thesis presents an automated pipeline for coverage-guided fuzzing of the Linux
+eBPF verifier using a fine-tuned large language model (LLM).
+Starting from approximately 2 million eBPF programs collected at the kernel FFI
+boundary using a modified version of the Buzzer fuzzer, we curate a balanced
+dataset of 27,000 samples across verifier error classes and fine-tune
+Qwen2.5-Coder-1.5B via QLoRA to generate syntactically valid verifier-log-format
+assembly.
+We then apply GRPO reinforcement learning with a reward signal derived from kernel
+code coverage (KCOV), training the model to explore deeper and less-visited
+verifier paths.
+A verdict-blind, depth-based reward formulation avoids the reward-collapse problem
+observed when accepted and rejected programs are rewarded differently.
+
+Experimental results show that the fine-tuned model improves pass-rate over the
+zero-shot baseline, and that the coverage-guided RL training phase successfully
+drives exploration of new kernel code paths.
+The system demonstrates that LLM-guided fuzzing is a viable approach for verifier
+security research, and provides a reproducible open-source pipeline for future work.
 
 \bigskip
 \noindent\textbf{Keywords:} eBPF, fuzzing, large language models, reinforcement learning,
