@@ -195,7 +195,7 @@ def validate_batch(hex_strings: list[str], host: str, port: int, user: str, key:
         # Run validation loop inside VM; outputs one verdict per line
         script = (
             f"while IFS= read -r line; do "
-            f"  res=$(/mnt/corpus/ebpf_validator \"$line\" 2>/dev/null | grep VERDETTO || echo 'VERDETTO: ERRORE'); "
+            f"  res=$(/mnt/corpus/ebpf_validator \"$line\" 2>/dev/null | grep VERDICT || echo 'VERDICT: ERROR'); "
             f"  echo \"$res\"; "
             f"done < {remote_path}"
         )
@@ -203,7 +203,7 @@ def validate_batch(hex_strings: list[str], host: str, port: int, user: str, key:
             ["ssh", "-p", str(port), "-i", key, *_SSH_OPTS, f"{user}@{host}", script],
             capture_output=True, text=True, timeout=600,
         )
-        verdicts = [l.strip() for l in r.stdout.splitlines() if "VERDETTO" in l]
+        verdicts = [l.strip() for l in r.stdout.splitlines() if "VERDICT" in l]
         return verdicts
     finally:
         os.unlink(local_path)
@@ -270,17 +270,17 @@ def main():
                 verdicts[i] = v
 
     # 5. Results
-    accepted    = sum(1 for v in verdicts if "ACCETTATO" in v)
-    rejected    = sum(1 for v in verdicts if "RIFIUTATO" in v)
-    error_count = sum(1 for v in verdicts if "ERRORE" in v or v == "SKIPPED" or not v)
+    accepted    = sum(1 for v in verdicts if "ACCEPTED" in v)
+    rejected    = sum(1 for v in verdicts if "REJECTED" in v)
+    error_count = sum(1 for v in verdicts if "ERROR" in v or v == "SKIPPED" or not v)
 
     print(f"\n{'='*50}")
     print(f" PASS-RATE RESULTS — {label}")
     print(f"{'='*50}")
     print(f" Generated  : {args.n}")
     print(f" Compiled   : {compile_ok}  ({compile_ok/args.n*100:.1f}%)")
-    print(f" ACCETTATO  : {accepted}  ({accepted/args.n*100:.1f}%)")
-    print(f" RIFIUTATO  : {rejected}  ({rejected/args.n*100:.1f}%)")
+    print(f" ACCEPTED  : {accepted}  ({accepted/args.n*100:.1f}%)")
+    print(f" REJECTED  : {rejected}  ({rejected/args.n*100:.1f}%)")
     print(f" Error/Skip : {error_count}")
     print(f"{'='*50}")
 

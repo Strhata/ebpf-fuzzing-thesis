@@ -48,7 +48,7 @@ func main() {
 	res := validate(os.Args[1])
 	out, _ := json.Marshal(res)
 	fmt.Println(string(out))
-	if res.Verdict == "ERRORE" {
+	if res.Verdict == "ERROR" {
 		os.Exit(1)
 	}
 }
@@ -57,7 +57,7 @@ func validate(hexStr string) result {
 	bytecode, err := hex.DecodeString(hexStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "decodifica hex: %v\n", err)
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
 	var insns asm.Instructions
@@ -66,7 +66,7 @@ func validate(hexStr string) result {
 		var ins asm.Instruction
 		if err := ins.Unmarshal(reader, binary.LittleEndian, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "parsing istruzione %d: %v\n", len(insns), err)
-			return result{Verdict: "ERRORE", PCs: []uint64{}}
+			return result{Verdict: "ERROR", PCs: []uint64{}}
 		}
 		insns = append(insns, ins)
 	}
@@ -75,7 +75,7 @@ func validate(hexStr string) result {
 	kcovFd, err := os.OpenFile("/sys/kernel/debug/kcov", os.O_RDWR, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apertura kcov: %v\n", err)
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 	defer kcovFd.Close()
 
@@ -84,14 +84,14 @@ func validate(hexStr string) result {
 	// KCOV_INIT_TRACE: tell kernel to allocate coverSize-entry buffer
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, kcovInitTrace, coverSize); errno != 0 {
 		fmt.Fprintf(os.Stderr, "KCOV_INIT_TRACE: %v\n", errno)
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
 	// mmap the shared buffer: coverSize uint64 entries = coverSize*8 bytes
 	area, err := unix.Mmap(int(fd), 0, coverSize*8, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mmap kcov: %v\n", err)
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 	defer unix.Munmap(area)
 
@@ -102,7 +102,7 @@ func validate(hexStr string) result {
 	// KCOV_ENABLE with KCOV_TRACE_PC (flat PC array, no comparison tracing)
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, kcovEnable, kcovTracePC); errno != 0 {
 		fmt.Fprintf(os.Stderr, "KCOV_ENABLE: %v\n", errno)
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
 	// Load BPF program — this is the syscall KCOV traces
@@ -121,12 +121,12 @@ func validate(hexStr string) result {
 	if loadErr != nil {
 		var ve *ebpf.VerifierError
 		if errors.As(loadErr, &ve) {
-			return result{Verdict: "RIFIUTATO", PCs: readPCs(cover)}
+			return result{Verdict: "REJECTED", PCs: readPCs(cover)}
 		}
-		return result{Verdict: "ERRORE", PCs: []uint64{}}
+		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 	prog.Close()
-	return result{Verdict: "ACCETTATO", PCs: readPCs(cover)}
+	return result{Verdict: "ACCEPTED", PCs: readPCs(cover)}
 }
 
 func readPCs(cover []uint64) []uint64 {

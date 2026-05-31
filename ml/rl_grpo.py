@@ -86,7 +86,7 @@ _trl_models.unwrap_model_for_generation = _fixed_unwrap_model_for_generation
 _grpo_mod.unwrap_model_for_generation = _fixed_unwrap_model_for_generation
 
 _SANITY_LOG = _REPO_ROOT / "results" / "sanity_checks.log"
-_VERDICT_PAT = re.compile(r'\b(ACCETTATO|RIFIUTATO|ENCODE_FAIL|SSH_TIMEOUT)\b')
+_VERDICT_PAT = re.compile(r'\b(ACCEPTED|REJECTED|ENCODE_FAIL|SSH_TIMEOUT)\b')
 
 
 class SanityCheckCallback(TrainerCallback):

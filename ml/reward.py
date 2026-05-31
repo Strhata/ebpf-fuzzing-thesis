@@ -293,7 +293,7 @@ def _validate_on_vm(hex_str: str, ssh: SSHClient) -> dict | None:
 def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     """Compute KCOV-based RL rewards for a batch of generated assembly programs.
 
-    Verdict-blind: RIFIUTATO and ACCETTATO programs are both rewarded by depth.
+    Verdict-blind: REJECTED and ACCEPTED programs are both rewarded by depth.
     Snapshot of _pc_set is taken before the batch so all completions compare
     against the same frontier regardless of evaluation order within the batch.
     """
@@ -327,9 +327,9 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
             pcs_per_program.append(0)
             continue
 
-        verdict = result.get("verdict", "ERRORE")
-        if verdict == "ERRORE":
-            _log.debug("batch=%d i=%d ERRORE insns=%d preview=%r",
+        verdict = result.get("verdict", "ERROR")
+        if verdict == "ERROR":
+            _log.debug("batch=%d i=%d ERROR insns=%d preview=%r",
                        batch_id, i, len(insns), preview)
             rewards.append(0.0)
             pcs_per_program.append(0)

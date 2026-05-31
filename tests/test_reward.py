@@ -40,7 +40,7 @@ def _mock_ssh(verdict: str, pcs: list[int] | None = None) -> MagicMock:
     """Return an SSHClient mock that returns the given verdict."""
     client = MagicMock()
     payload = json.dumps({"verdict": verdict, "pcs": pcs or []})
-    rc = 0 if verdict == "ACCETTATO" else 1
+    rc = 0 if verdict == "ACCEPTED" else 1
     client.run.return_value = (rc, payload, "")
     return client
 
@@ -59,7 +59,7 @@ class TestRewardFormula(unittest.TestCase):
 
     def test_compile_fail_returns_zero(self):
         rw = self._rw()
-        ssh = _mock_ssh("ACCETTATO")
+        ssh = _mock_ssh("ACCEPTED")
         rewards = rw.compute_rewards([_BAD_ASM], ssh)
         self.assertEqual(rewards, [0.0])
         ssh.run.assert_not_called()
@@ -84,7 +84,7 @@ class TestRewardFormula(unittest.TestCase):
                 rw._max_pcs_seen = 100
                 pcs = list(range(n_pcs))
                 rw._pc_set = set(pcs)  # pre-seed so no discovery bonus
-                ssh = _mock_ssh("ACCETTATO", pcs=pcs)
+                ssh = _mock_ssh("ACCEPTED", pcs=pcs)
                 with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
                     rewards = rw.compute_rewards([_VALID_ASM], ssh)
                 self.assertAlmostEqual(rewards[0], expected, places=5)
@@ -96,7 +96,7 @@ class TestRewardFormula(unittest.TestCase):
     def test_max_pcs_seen_updates_on_record(self):
         rw = self._rw()
         rw._max_pcs_seen = 10
-        ssh = _mock_ssh("ACCETTATO", pcs=list(range(25)))
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(25)))
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rw._max_pcs_seen, 25)
@@ -104,7 +104,7 @@ class TestRewardFormula(unittest.TestCase):
     def test_max_pcs_seen_does_not_decrease(self):
         rw = self._rw()
         rw._max_pcs_seen = 50
-        ssh = _mock_ssh("ACCETTATO", pcs=list(range(10)))
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(10)))
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rw._max_pcs_seen, 50)
@@ -114,7 +114,7 @@ class TestRewardFormula(unittest.TestCase):
     def test_discovery_bonus_fires_on_new_pc(self):
         rw = self._rw()
         rw._max_pcs_seen = 10
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x9999])
+        ssh = _mock_ssh("ACCEPTED", pcs=[0x9999])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
@@ -124,7 +124,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 10
         rw._pc_set = {0x9999}
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x9999])
+        ssh = _mock_ssh("ACCEPTED", pcs=[0x9999])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
@@ -136,7 +136,7 @@ class TestRewardFormula(unittest.TestCase):
         # is taken before either completion is evaluated.
         rw = self._rw()
         rw._max_pcs_seen = 10
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x1000])
+        ssh = _mock_ssh("ACCEPTED", pcs=[0x1000])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
@@ -149,7 +149,7 @@ class TestRewardFormula(unittest.TestCase):
     def test_rifiutato_gets_depth_reward(self):
         rw = self._rw()
         rw._max_pcs_seen = 10
-        ssh = _mock_ssh("RIFIUTATO", pcs=[0x1000, 0x1001])
+        ssh = _mock_ssh("REJECTED", pcs=[0x1000, 0x1001])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 2 / 10 * 0.5)
@@ -158,7 +158,7 @@ class TestRewardFormula(unittest.TestCase):
 
     def test_accettato_not_treated_as_errore(self):
         rw = self._rw()
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x5555])
+        ssh = _mock_ssh("ACCEPTED", pcs=[0x5555])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertGreater(rewards[0], 0.0)
@@ -167,8 +167,8 @@ class TestRewardFormula(unittest.TestCase):
 
     def test_pc_set_grows_across_calls(self):
         rw = self._rw()
-        ssh1 = _mock_ssh("ACCETTATO", pcs=[0xA])
-        ssh2 = _mock_ssh("ACCETTATO", pcs=[0xB])
+        ssh1 = _mock_ssh("ACCEPTED", pcs=[0xA])
+        ssh2 = _mock_ssh("ACCEPTED", pcs=[0xB])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh1)
             rw.compute_rewards([_VALID_ASM], ssh2)
@@ -179,7 +179,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._pc_set = {0x42}
         rw._call_count = 99
-        ssh = _mock_ssh("ACCETTATO", pcs=[0x43])
+        ssh = _mock_ssh("ACCEPTED", pcs=[0x43])
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertTrue(Path(self._pc_path).exists(), "PC set file not written at call 100")
@@ -192,7 +192,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 5
         rw._call_count = 99
-        ssh = _mock_ssh("ACCETTATO", pcs=list(range(8)))  # 8 pcs > 5
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(8)))  # 8 pcs > 5
         with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertTrue(Path(self._max_pcs_path).exists(),

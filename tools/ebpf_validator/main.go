@@ -54,16 +54,16 @@ func main() {
 	var ve *ebpf.VerifierError
 	if err != nil {
 		if errors.As(err, &ve) {
-			fmt.Println("\n--- VERIFIER LOG (RIFIUTATO) ---")
+			fmt.Println("\n--- VERIFIER LOG (REJECTED) ---")
 			fmt.Printf("%+v\n", ve)
 			fmt.Println("--------------------------------")
 		} else {
 			fmt.Printf("\n[!] Non-verifier error: %v\n", err)
 		}
-		fmt.Printf("\n[!] VERDETTO: RIFIUTATO!\n")
+		fmt.Printf("\n[!] VERDICT: REJECTED!\n")
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n[+] VERDETTO: ACCETTATO!\n")
+	fmt.Printf("\n[+] VERDICT: ACCEPTED!\n")
 	prog.Close()
 }

@@ -65,7 +65,7 @@ Steps per epoch: ~3,095 | 3 epochs total: ~9,285 steps
 
 ## Phase 4 — Pass-rate evaluation ✅ (2026-05-17)
 
-| Model | N | Compiled | ACCETTATO | Compile rate | Pass-rate |
+| Model | N | Compiled | ACCEPTED | Compile rate | Pass-rate |
 |---|---|---|---|---|---|
 | `curated-merged` | 100 | 73 | **60** | 73.0% | **60.0%** |
 | `zero-shot` (Qwen2.5-Coder-1.5B base) | 100 | 1 | 1 | 1.0% | 1.0% |

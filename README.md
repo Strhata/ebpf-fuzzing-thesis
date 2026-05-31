@@ -62,20 +62,20 @@ the assembler.
 
 | Tier | Condition | Value |
 |---|---|---|
-| New PCs | ACCETTATO + unseen kernel PCs | 1.0 |
-| Valid, no new PCs | ACCETTATO, PCs already known | 0.1 |
-| Verifier rejected | RIFIUTATO | 0.1 |
+| New PCs | ACCEPTED + unseen kernel PCs | 1.0 |
+| Valid, no new PCs | ACCEPTED, PCs already known | 0.1 |
+| Verifier rejected | REJECTED | 0.1 |
 | Crash / timeout | SSH timeout | 2.0 |
 | Unparseable | ENCODE_FAIL | 0.0 |
 
 Run 1 plateaued at 137 new PCs / 1638 total unique PCs (step ~1300, `reward_std=0`). Root cause discovered
-post-run: `kcov_validator` was discarding the KCOV trace for RIFIUTATO programs (returning
+post-run: `kcov_validator` was discarding the KCOV trace for REJECTED programs (returning
 `PCs: []`), making all rejected programs look identical. With GRPO this causes
 `reward_std=0` within each group → zero gradient → no learning.
 
 #### Redesigned reward (depth-based, verdict-blind)
 
-After fixing `kcov_validator` to return PCs for RIFIUTATO programs:
+After fixing `kcov_validator` to return PCs for REJECTED programs:
 
 ```
 depth_component = min(0.5, len(pcs) / max_pcs_seen * 0.5)
@@ -87,7 +87,7 @@ Special cases:
   crash       → 2.0   (SSH timeout; VM may have crashed)
 ```
 
-Verdict (ACCETTATO / RIFIUTATO) does not affect the reward — only coverage depth does.
+Verdict (ACCEPTED / REJECTED) does not affect the reward — only coverage depth does.
 This ensures reward variance within each GRPO group even when most programs are rejected.
 
 A pre-batch snapshot (`pc_set_snapshot = frozenset(_pc_set)`) is taken before the loop
@@ -195,8 +195,8 @@ The opcode byte `(XX)` is extracted directly; dst/src/off/imm are parsed from th
 instruction text. Programs with unusual operands reach the verifier instead of being
 rejected by clang.
 
-**KCOV bug (run 1):** `kcov_validator` returned `PCs: []` for RIFIUTATO programs.
-Fixed in commit c8a9d02 — `readPCs()` helper now called for both ACCETTATO and RIFIUTATO.
+**KCOV bug (run 1):** `kcov_validator` returned `PCs: []` for REJECTED programs.
+Fixed in commit c8a9d02 — `readPCs()` helper now called for both ACCEPTED and REJECTED.
 
 **Periodic health checks:** `SanityCheckCallback` fires every hour during local training,
 logging VM status, verdict breakdown, and cumulative PC count to `results/sanity_checks.log`.

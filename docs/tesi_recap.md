@@ -148,7 +148,7 @@ Pipeline built by hand to measure generation quality:
 2. Inside the QEMU VM, mount the corpus via 9p at `/mnt/corpus`.
 3. Feed the `risultati_checkpoint-*.txt` file line by line to
    **`ebpf_validator`** (written by me), which calls the verifier and prints
-   `VERDETTO: ACCETTATO` / `VERDETTO: RIFIUTATO`.
+   `VERDICT: ACCEPTED` / `VERDICT: REJECTED`.
 4. Count accepted programs and compute pass-rate per checkpoint.
 5. For the first 25 programs, full verifier log dump to classify rejection causes.
 
@@ -160,7 +160,7 @@ version that invokes `ebpf_validator` on container `fuzzer_node_1`.
 Formal evaluation on `curated_merged` (final SFT model, 3 complete epochs)
 vs `zero-shot` (Qwen2.5-Coder-1.5B base with no fine-tuning). N=100 programs each.
 
-| Model | N | Compiled | ACCETTATO | Compile rate | Pass-rate |
+| Model | N | Compiled | ACCEPTED | Compile rate | Pass-rate |
 |-------|---|----------|-----------|--------------|-----------|
 | `curated-merged` (SFT) | 100 | 73 | **60** | 73.0% | **60.0%** |
 | `zero-shot` (base) | 100 | 1 | 1 | 1.0% | **1.0%** |
@@ -282,8 +282,8 @@ cd /mnt/corpus
 counter=1
 accepted=0
 while read -r line; do
-    res=$(./ebpf_validator "$line" | grep "VERDETTO")
-    if [[ $res == *"ACCETTATO"* ]]; then
+    res=$(./ebpf_validator "$line" | grep "VERDICT")
+    if [[ $res == *"ACCEPTED"* ]]; then
         accepted=$((accepted+1))
         echo "[+] Prog $counter: OK"
     else

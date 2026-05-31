@@ -94,9 +94,9 @@ def parse_log(path):
     if not path.exists():
         return {"acc": 0, "cf": 0, "rif": 0, "new_pcs": 0, "total": 1,
                 "acc_pct": 0, "cf_pct": 0}
-    pat = re.compile(r'(ACCETTATO|COMPILE_FAIL|RIFIUTATO)')
+    pat = re.compile(r'(ACCEPTED|COMPILE_FAIL|REJECTED)')
     npc = re.compile(r'new_pcs=(\d+)')
-    counts = {"ACCETTATO": 0, "COMPILE_FAIL": 0, "RIFIUTATO": 0}
+    counts = {"ACCEPTED": 0, "COMPILE_FAIL": 0, "REJECTED": 0}
     new_pcs = 0
     for line in path.read_text().splitlines():
         m = pat.search(line)
@@ -107,11 +107,11 @@ def parse_log(path):
             new_pcs += int(n.group(1))
     total = sum(counts.values()) or 1
     return {
-        "acc": counts["ACCETTATO"],
+        "acc": counts["ACCEPTED"],
         "cf": counts["COMPILE_FAIL"],
-        "rif": counts["RIFIUTATO"],
+        "rif": counts["REJECTED"],
         "total": total,
-        "acc_pct": 100 * counts["ACCETTATO"] / total,
+        "acc_pct": 100 * counts["ACCEPTED"] / total,
         "cf_pct": 100 * counts["COMPILE_FAIL"] / total,
         "new_pcs": new_pcs,
     }
@@ -127,9 +127,9 @@ PC set at start of comparison: {baseline_pcs} unique PCs
 ## Config A — G=4, max=600, beta=0.01
 Steps: 100
 Total completions: {a['total']}
-ACCETTATO:    {a['acc']:5d}  ({a['acc_pct']:.1f}%)
+ACCEPTED:    {a['acc']:5d}  ({a['acc_pct']:.1f}%)
 COMPILE_FAIL: {a['cf']:5d}  ({a['cf_pct']:.1f}%)
-RIFIUTATO:    {a['rif']:5d}  ({100*a['rif']/(a['total'] or 1):.1f}%)
+REJECTED:    {a['rif']:5d}  ({100*a['rif']/(a['total'] or 1):.1f}%)
 New PCs:      {a['new_pcs']}
 
 ## Config B — G=4, max=800, beta=0.01
@@ -170,9 +170,9 @@ def parse_log(path):
     if not path.exists():
         return {"acc": 0, "cf": 0, "rif": 0, "new_pcs": 0, "total": 1,
                 "acc_pct": 0, "cf_pct": 0}
-    pat = re.compile(r'(ACCETTATO|COMPILE_FAIL|RIFIUTATO)')
+    pat = re.compile(r'(ACCEPTED|COMPILE_FAIL|REJECTED)')
     npc = re.compile(r'new_pcs=(\d+)')
-    counts = {"ACCETTATO": 0, "COMPILE_FAIL": 0, "RIFIUTATO": 0}
+    counts = {"ACCEPTED": 0, "COMPILE_FAIL": 0, "REJECTED": 0}
     new_pcs = 0
     for line in path.read_text().splitlines():
         m = pat.search(line)
@@ -183,9 +183,9 @@ def parse_log(path):
             new_pcs += int(n.group(1))
     total = sum(counts.values()) or 1
     return {
-        "acc": counts["ACCETTATO"], "cf": counts["COMPILE_FAIL"],
-        "rif": counts["RIFIUTATO"], "total": total,
-        "acc_pct": 100 * counts["ACCETTATO"] / total,
+        "acc": counts["ACCEPTED"], "cf": counts["COMPILE_FAIL"],
+        "rif": counts["REJECTED"], "total": total,
+        "acc_pct": 100 * counts["ACCEPTED"] / total,
         "cf_pct": 100 * counts["COMPILE_FAIL"] / total,
         "new_pcs": new_pcs,
     }
@@ -219,7 +219,7 @@ PC set at start of comparison: {baseline_pcs} unique PCs
 |----------------|-------------------|---------------------|-------------|
 | Steps          | 100               | 100                 | —           |
 | Total completions | {a['total']:16d} | {b['total']:19d} | —           |
-| ACCETTATO%     | {a['acc_pct']:17.1f}% | {b['acc_pct']:18.1f}% | {b['acc_pct']-a['acc_pct']:+.1f}pp  |
+| ACCEPTED%     | {a['acc_pct']:17.1f}% | {b['acc_pct']:18.1f}% | {b['acc_pct']-a['acc_pct']:+.1f}pp  |
 | COMPILE_FAIL%  | {a['cf_pct']:17.1f}% | {b['cf_pct']:18.1f}% | {b['cf_pct']-a['cf_pct']:+.1f}pp  |
 | New PCs        | {a['new_pcs']:17d} | {b['new_pcs']:19d} | {npc_delta:+d}         |
 

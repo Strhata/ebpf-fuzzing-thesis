@@ -29,7 +29,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 _LINE_RE = re.compile(
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+\s+"
     r"batch=(\d+)\s+i=\d+\s+"
-    r"(ACCETTATO|RIFIUTATO|ENCODE_FAIL|COMPILE_FAIL|SSH_TIMEOUT)"
+    r"(ACCEPTED|REJECTED|ENCODE_FAIL|COMPILE_FAIL|SSH_TIMEOUT)"
     r"(?:\s+new_pcs=(\d+))?"
 )
 
@@ -44,9 +44,9 @@ _TIER_COLORS = {
 
 
 def _tier(verdict: str, new_pcs: int) -> str:
-    if verdict == "ACCETTATO":
+    if verdict == "ACCEPTED":
         return "new_pcs" if new_pcs > 0 else "valid"
-    if verdict == "RIFIUTATO":
+    if verdict == "REJECTED":
         return "rejected"
     if verdict in ("ENCODE_FAIL", "COMPILE_FAIL"):
         return "encode_fail"
@@ -54,9 +54,9 @@ def _tier(verdict: str, new_pcs: int) -> str:
 
 
 def _reward(verdict: str, new_pcs: int) -> float:
-    if verdict == "ACCETTATO":
+    if verdict == "ACCEPTED":
         return 1.0 if new_pcs > 0 else 0.1
-    if verdict == "RIFIUTATO":
+    if verdict == "REJECTED":
         return 0.1
     if verdict in ("ENCODE_FAIL", "COMPILE_FAIL"):
         return 0.0

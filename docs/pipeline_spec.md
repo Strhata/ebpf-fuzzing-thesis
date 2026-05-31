@@ -210,9 +210,9 @@ done < /tmp/eval_programs.txt
 
 | Verdict | Meaning |
 |---------|---------|
-| `VERDETTO: ACCETTATO` | Kernel verifier accepted — program is safe and loadable |
-| `VERDETTO: RIFIUTATO` | Kernel verifier rejected — safety violation or invalid program |
-| `VERDETTO: ERRORE` | Validator error (syscall failed, not a verifier decision) |
+| `VERDICT: ACCEPTED` | Kernel verifier accepted — program is safe and loadable |
+| `VERDICT: REJECTED` | Kernel verifier rejected — safety violation or invalid program |
+| `VERDICT: ERROR` | Validator error (syscall failed, not a verifier decision) |
 
 **Output:** List of verdict strings, one per compiled program.
 
@@ -225,7 +225,7 @@ done < /tmp/eval_programs.txt
 | Metric | Formula |
 |--------|---------|
 | Compile rate | `n_compiled / n_generated` |
-| Pass rate | `n_ACCETTATO / n_generated` |
+| Pass rate | `n_ACCEPTED / n_generated` |
 
 **Output files:**
 

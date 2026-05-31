@@ -79,27 +79,27 @@ def test_recent_verdicts_empty_when_no_log(tmp_path):
 def test_recent_verdicts_counts_correctly(tmp_path):
     log = tmp_path / "grpo.log"
     log.write_text(
-        "batch=0 i=0 ACCETTATO new_pcs=1\n"
-        "batch=0 i=1 RIFIUTATO insns=5\n"
-        "batch=0 i=2 RIFIUTATO insns=3\n"
+        "batch=0 i=0 ACCEPTED new_pcs=1\n"
+        "batch=0 i=1 REJECTED insns=5\n"
+        "batch=0 i=2 REJECTED insns=3\n"
         "batch=0 i=3 ENCODE_FAIL insns=0\n"
     )
     cb = SanityCheckCallback(_ssh_up())
     with patch('rl_grpo._GRPO_DEBUG_LOG', log):
         counts = cb._recent_verdicts(200)
-    assert counts == {"ACCETTATO": 1, "RIFIUTATO": 2, "ENCODE_FAIL": 1}
+    assert counts == {"ACCEPTED": 1, "REJECTED": 2, "ENCODE_FAIL": 1}
 
 
 def test_recent_verdicts_respects_n_limit(tmp_path):
     log = tmp_path / "grpo.log"
-    # 10 ACCETTATO followed by 5 RIFIUTATO
-    lines = ["ACCETTATO\n"] * 10 + ["RIFIUTATO\n"] * 5
+    # 10 ACCEPTED followed by 5 REJECTED
+    lines = ["ACCEPTED\n"] * 10 + ["REJECTED\n"] * 5
     log.write_text("".join(lines))
     cb = SanityCheckCallback(_ssh_up())
     with patch('rl_grpo._GRPO_DEBUG_LOG', log):
         counts = cb._recent_verdicts(5)  # only last 5
-    assert counts.get("ACCETTATO", 0) == 0
-    assert counts.get("RIFIUTATO", 0) == 5
+    assert counts.get("ACCEPTED", 0) == 0
+    assert counts.get("REJECTED", 0) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ def test_report_written_to_sanity_log(tmp_path):
     cb = SanityCheckCallback(_ssh_up())
     sanity = tmp_path / "sanity_checks.log"
     debug = tmp_path / "grpo.log"
-    debug.write_text("ACCETTATO\nRIFIUTATO\n")
+    debug.write_text("ACCEPTED\nREJECTED\n")
     with patch('rl_grpo._SANITY_LOG', sanity), \
          patch('rl_grpo._GRPO_DEBUG_LOG', debug):
         cb._run_check(step=99)
@@ -143,7 +143,7 @@ def test_report_shows_vm_down(tmp_path, capsys):
 
 def test_warning_on_high_encode_fail_rate(tmp_path, capsys):
     log = tmp_path / "grpo.log"
-    log.write_text("ENCODE_FAIL\n" * 9 + "ACCETTATO\n")  # 90% fail
+    log.write_text("ENCODE_FAIL\n" * 9 + "ACCEPTED\n")  # 90% fail
     cb = SanityCheckCallback(_ssh_up())
     sanity = tmp_path / "s.log"
     with patch('rl_grpo._SANITY_LOG', sanity), \
@@ -156,7 +156,7 @@ def test_warning_on_high_encode_fail_rate(tmp_path, capsys):
 
 def test_no_warning_on_healthy_run(tmp_path, capsys):
     log = tmp_path / "grpo.log"
-    log.write_text("ACCETTATO\n" * 5 + "RIFIUTATO\n" * 15)
+    log.write_text("ACCEPTED\n" * 5 + "REJECTED\n" * 15)
     cb = SanityCheckCallback(_ssh_up())
     sanity = tmp_path / "s.log"
     with patch('rl_grpo._SANITY_LOG', sanity), \

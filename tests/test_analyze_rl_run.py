@@ -10,24 +10,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 from analyze_rl_run import aggregate, parse_log, write_pcs_csv, write_tiers_csv
 
 _SINGLE_SEGMENT_LOG = """\
-2026-01-01 00:00:00,000 batch=0 i=0 ACCETTATO new_pcs=3
-2026-01-01 00:00:01,000 batch=0 i=1 RIFIUTATO insns=5
+2026-01-01 00:00:00,000 batch=0 i=0 ACCEPTED new_pcs=3
+2026-01-01 00:00:01,000 batch=0 i=1 REJECTED insns=5
 2026-01-01 00:00:02,000 batch=0 i=2 ENCODE_FAIL insns=0
 2026-01-01 00:00:03,000 batch=0 i=3 COMPILE_FAIL insns=0
-2026-01-01 00:01:00,000 batch=1 i=0 ACCETTATO new_pcs=0
-2026-01-01 00:01:01,000 batch=1 i=1 ACCETTATO new_pcs=2
+2026-01-01 00:01:00,000 batch=1 i=0 ACCEPTED new_pcs=0
+2026-01-01 00:01:01,000 batch=1 i=1 ACCEPTED new_pcs=2
 2026-01-01 00:01:02,000 batch=1 i=2 SSH_TIMEOUT
-2026-01-01 00:01:03,000 batch=1 i=3 RIFIUTATO insns=3
+2026-01-01 00:01:03,000 batch=1 i=3 REJECTED insns=3
 """
 
 _TWO_SEGMENT_LOG = """\
-2026-01-01 00:00:00,000 batch=0 i=0 RIFIUTATO insns=5
-2026-01-01 00:00:01,000 batch=1 i=0 ACCETTATO new_pcs=1
-2026-01-01 00:00:02,000 batch=1 i=1 RIFIUTATO insns=3
-2026-01-01 00:01:00,000 batch=0 i=0 ACCETTATO new_pcs=5
+2026-01-01 00:00:00,000 batch=0 i=0 REJECTED insns=5
+2026-01-01 00:00:01,000 batch=1 i=0 ACCEPTED new_pcs=1
+2026-01-01 00:00:02,000 batch=1 i=1 REJECTED insns=3
+2026-01-01 00:01:00,000 batch=0 i=0 ACCEPTED new_pcs=5
 2026-01-01 00:01:01,000 batch=0 i=1 ENCODE_FAIL insns=0
-2026-01-01 00:01:02,000 batch=1 i=0 ACCETTATO new_pcs=0
-2026-01-01 00:01:03,000 batch=1 i=1 ACCETTATO new_pcs=2
+2026-01-01 00:01:02,000 batch=1 i=0 ACCEPTED new_pcs=0
+2026-01-01 00:01:03,000 batch=1 i=1 ACCEPTED new_pcs=2
 """
 
 
@@ -67,8 +67,8 @@ def test_tier_counts_batch0():
         segs = parse_log(log)
     rows = aggregate(segs[0])
     b0 = next(r for r in rows if r["batch"] == 0)
-    assert b0["new_pcs"] == 1    # ACCETTATO new_pcs=3
-    assert b0["rejected"] == 1   # RIFIUTATO
+    assert b0["new_pcs"] == 1    # ACCEPTED new_pcs=3
+    assert b0["rejected"] == 1   # REJECTED
     assert b0["encode_fail"] == 2  # ENCODE_FAIL + COMPILE_FAIL
     assert b0["valid"] == 0
     assert b0["crash"] == 0
@@ -80,7 +80,7 @@ def test_valid_vs_new_pcs_split():
         segs = parse_log(log)
     rows = aggregate(segs[0])
     b1 = next(r for r in rows if r["batch"] == 1)
-    # ACCETTATO new_pcs=0 → valid, ACCETTATO new_pcs=2 → new_pcs
+    # ACCEPTED new_pcs=0 → valid, ACCEPTED new_pcs=2 → new_pcs
     assert b1["valid"] == 1
     assert b1["new_pcs"] == 1
     assert b1["crash"] == 1   # SSH_TIMEOUT
@@ -140,7 +140,7 @@ def test_two_segment_cumulative_pcs_independent():
         segs = parse_log(log)
     rows0 = aggregate(segs[0])
     rows1 = aggregate(segs[1])
-    # segment 0: batch0=RIFIUTATO (0 new_pcs), batch1=ACCETTATO new_pcs=1 → cumulative=[0,1]
+    # segment 0: batch0=REJECTED (0 new_pcs), batch1=ACCEPTED new_pcs=1 → cumulative=[0,1]
     assert rows0[0]["cumulative_pcs"] == 0
     assert rows0[1]["cumulative_pcs"] == 1
     # segment 1: batch0=5 new_pcs, batch1=2 new_pcs → cumulative=[5,7]
