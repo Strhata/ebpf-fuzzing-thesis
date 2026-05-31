@@ -15,18 +15,21 @@ motivati dall'aver capito strada facendo cosa stavo usando davvero.
 
 ---
 
-## 2. Il malinteso su buzzer
+## 2. Buzzer — cosa è e come è stato usato
 
-- **Assunzione iniziale:** pensavo che [buzzer](https://github.com/google/buzzer) fosse un
-  wrapper AFL specializzato sul verifier eBPF, coerente con la richiesta del relatore.
-- **Realtà:** buzzer è un fuzzer eBPF **standalone**, scritto in Go da Google, con
-  strategie proprie (es. `--strategy=pointer_arithmetic`, `--strategy=coverage_based`).
-  Non usa AFL sotto.
-- **Come me ne sono accorto:** dal *mismatch di comportamento* — non c'era la UI tipica
-  di `afl-fuzz`, non c'era la shared-memory coverage map (la `__AFL_SHM_ID`), le
-  metriche e i flag non corrispondevano affatto a quelli di AFL/AFL++.
-- **Conseguenza:** nel lavoro svolto fin qui **AFL non è mai stato integrato**. La
-  richiesta del relatore resta quindi aperta — vedi sezione 10.
+- **Cos'è:** [buzzer](https://github.com/google/buzzer) è un fuzzer eBPF **standalone**
+  scritto in Go da Google, con strategie proprie (`--strategy=pointer_arithmetic`,
+  `--strategy=coverage_based`). Non è un wrapper AFL.
+- **Modalità smart e KCOV:** la modalità `coverage_based` di buzzer usa KCOV, ma solo
+  per raccogliere metriche human-readable esposte via HTTP server — **non** come segnale
+  di feedback per guidare la mutazione. Non è un loop coverage-guided nel senso AFL.
+- **Scoperta chiave:** questa limitazione (KCOV usato solo per display, non per feedback)
+  è stata il trigger del pivot verso l'approccio LLM+GRPO: se buzzer non usa la
+  coverage come segnale di mutazione, costruire un loop RL con KCOV come reward è
+  un contributo genuinamente nuovo.
+- **Ruolo nel progetto:** buzzer è stato usato come **generatore di dati** — modificato
+  in `ffi.go` per dumpare ogni coppia `(bytecode_hex, verifier_log)` — non come fuzzer
+  principale.
 
 ---
 
@@ -87,11 +90,17 @@ Tutto il lavoro ML vive in `fuzzing_ml_env/`.
 
 ### Motivazione del pivot
 
-**[DA COMPLETARE]** — scrivi qui perché hai deciso di passare dal fuzzing "classico"
-alla generazione di bytecode via LLM: era perché buzzer non era AFL e volevi
-comunque produrre input interessanti? perché il corpus di syzkaller era ricco e
-sfruttabile come dataset di training? perché coverage-guided su eBPF non stava dando
-bug nuovi? solo tu conosci il vero perché.
+La scoperta determinante è stata capire come buzzer usa KCOV. La modalità
+`coverage_based` espone le metriche di copertura via un HTTP server interno — il
+dato è leggibile dall'operatore ma **non viene usato per guidare la mutazione**.
+Buzzer genera programmi in base a strategie hard-coded in Go, non in risposta a
+quale codice del kernel sta coprendo.
+
+Questo ha evidenziato un gap reale: nessun sistema esistente combinava generazione
+LLM di programmi eBPF con il segnale KCOV come reward per RL. Usare buzzer come
+raccoglitore di dati (2M entry di `bytecode_hex + verifier_log`) e poi addestrare
+un LLM con GRPO e reward basato su KCOV era un approccio nuovo e vale la pena
+investigare.
 
 ### Setup di training
 
@@ -151,19 +160,21 @@ Pipeline costruita a mano per misurare la qualità delle generazioni:
 Il loop completo è in `note.txt` (linee 56–87), inclusa la versione `docker exec`
 che invoca `ebpf_validator` sul container `fuzzer_node_1`.
 
-### Pass-rate misurati
+### Pass-rate misurati (risultati definitivi)
 
-**[DA COMPLETARE]** — riempi con i numeri che hai raccolto:
+Valutazione formale eseguita su `curated_merged` (modello finale SFT, 3 epoch completi)
+vs `zero-shot` (Qwen2.5-Coder-1.5B base senza fine-tuning). N=100 programmi ciascuno.
 
-| Checkpoint | File | Accettati / Totali | Pass-rate |
-|------------|------|--------------------|-----------|
-| 500 | `risultati_checkpoint-500.txt` | … / 21 | … % |
-| 1000 (run 1) | `risultati_checkpoint-1000.txt` | … / 21 | … % |
-| 1000 (run 2) | `risultati_checkpoint-1000-1.txt` | … / 15 | … % |
-| 1000 (run 3) | `risultati_checkpoint-1000-2.txt` | … / 15 | … % |
-| 1000 (run 4) | `risultati_checkpoint-1000-3.txt` | … / 15 | … % |
-| 2000 | `risultati_checkpoint-2000.txt` | … / 50 | … % |
-| 3000 | `risultati_checkpoint_3000.txt` | … / 50 | … % |
+| Modello | N | Compilati | ACCETTATO | Compile rate | Pass-rate |
+|---------|---|-----------|-----------|--------------|-----------|
+| `curated-merged` (SFT) | 100 | 73 | **60** | 73.0% | **60.0%** |
+| `zero-shot` (base) | 100 | 1 | 1 | 1.0% | **1.0%** |
+
+Fonte: `results/passrate_summary.csv`, log in `results/passrate_run_curated.log` e
+`results/passrate_run_zeroshot.log`.
+
+**Risultato chiave:** il fine-tuning porta il pass-rate da ~0% (base, funzionalmente zero)
+a 60%, dimostrando che il modello ha imparato la sintassi BPF dal training data.
 
 ---
 
@@ -183,23 +194,23 @@ che invoca `ebpf_validator` sul container `fuzzer_node_1`.
 
 ## 9. Cosa NON è stato fatto
 
-- **AFL non integrato.** La richiesta originale del relatore resta aperta.
+- **RL run 2 non eseguita.** Il pipeline con reward depth-based verdict-blind è stato
+  implementato e validato localmente, ma non è stato eseguito un training run completo.
+  Documentato come future work.
 - **Nessun confronto quantitativo** tra le run di buzzer e i bytecode generati da
   Qwen fine-tuned.
 
 ---
 
-## 10. Prossimi passi (proposte, non decisioni)
+## 10. Prossimi passi (future work)
 
-1. Integrare davvero **AFL / AFL++** con un harness dedicato al verifier eBPF, per
-   chiudere la richiesta iniziale del relatore.
-2. Confronto sistematico, a parità di tempo-macchina:
-   - buzzer con strategia coverage-guided,
-   - bytecode generati dal modello fine-tuned,
-   - (ideale) AFL++ una volta integrato.
-   Metriche: pass-rate sul verifier, coverage del kernel (KCOV), bug unici.
-3. Pulire il dataset dei bytecode generati e pubblicarlo come artefatto di tesi,
-   insieme all'adapter LoRA finale.
+1. **RL run 2** con reward depth-based verdict-blind (già implementato in `ml/reward.py`)
+   e prompt neutro (senza `Status: VALID`) — isolerebbe la variabile del prompt bias
+   rispetto al KCOV bug.
+2. **SFT con prompt diverso** — addestrare verso programmi che stressano il verifier
+   invece di generare programmi validi; valutare se cambia il comportamento RL.
+3. Confronto sistematico tra buzzer coverage-guided e modello fine-tuned a parità di
+   tempo-macchina, misurato in unique verifier PCs.
 
 ---
 

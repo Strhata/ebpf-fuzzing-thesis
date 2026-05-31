@@ -12,8 +12,6 @@
 | Repo layout | Single monorepo `ebpf-fuzzing-thesis` with `fuzzing/` and `ml/` top-level dirs |
 | Large artifacts | Models + corpus on HuggingFace. Only `adattatore_ebpf_v1` (final adapter) committed to git. |
 | Model format | Assembly (verifier-log format) only. Hex approach documented as abandoned. |
-| Comparison design | Two models, same architecture (Qwen2.5-Coder-1.5B QLoRA r=16), same format, same size (27k). Variable: curation only. |
-| Baseline dataset | Same valid-byte filter applied, no per-category cap. Random 27k sample → dominated by top error class (~34% `math between map_value pointer and <NUM>`). Proves balancing matters. |
 | Training duration | 3 epochs (`num_train_epochs=3`), replacing `max_steps=1500` which only covered 48% of data. |
 | WandB | `report_to="wandb"`, loss curves during training only. Pass-rate evaluated separately post-training. |
 | Pass-rate eval | Standalone script: generate 100 programs → clang → llvm-objcopy → SSH → validator → table. |
@@ -46,7 +44,6 @@
 ### Phase 2 — Dataset curation + SFT ✅
 - Analyzed error class distribution across ~2M raw entries
 - Balanced to 27k samples (cap 2000/class) to avoid top-error-class domination
-- Baseline dataset: same 27k, no cap, dominated by top class — control for curation value
 - QLoRA fine-tune: Qwen2.5-Coder-1.5B, rank-16, Q/K/V/O projections, 3 epochs
 - Merged adapter published to HuggingFace (`Strhata/ebpf-checkpoints/curated_merged`)
 
@@ -120,7 +117,6 @@ ebpf-fuzzing-thesis/
 
 | Risk | Mitigation |
 |---|---|
-| Baseline model performs equally to curated | Still publishable: shows robustness of balancing; adjust claim in thesis |
 | Pass-rate too low on both models | Report absolute numbers honestly; frame as baseline for future RL work |
 | RL plateau persists at beta=0.1 | Expected — reward_std=0 is a known GRPO signal-collapse under homogeneous reward. Document as thesis finding. |
 | Colab Pro session dies mid-run | Manual restart per `docs/colab_restart_guide.md`; auto-resume picks up from last checkpoint |
