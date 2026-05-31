@@ -21,7 +21,7 @@
 | BPF encoder | Pure-Python encoder bypasses clang: extracts opcode byte from verifier-log format, packs dst/src/off/imm directly. Programs that would fail clang still reach the verifier. |
 | RL reward tiers (run 1) | crash→2.0, new_pcs→1.0, valid→0.1, rejected→0.1, encode_fail→0.0. Valid and rejected share value 0.1 but are distinguished by tier label in the log. |
 | RL reward redesign | Depth-based verdict-blind formula after KCOV bug discovery: `depth=min(0.5, pcs/max_pcs_seen*0.5) + 1.0 if new_pcs else 0.0`. RIFIUTATO no longer penalised — only coverage depth matters. Implemented in `ml/reward.py`. |
-| RL training run | `rl_grpo_v2`: beta=0.01, G=4, max_completion_length=600, **stopped** after plateauing at ~138 cumulative PCs. Root cause: `kcov_validator` returned empty PC trace for RIFIUTATO → reward_std=0 → zero GRPO gradient. Fixed in commit c8a9d02. |
+| RL training run | `rl_grpo_v2`: beta=0.01, G=4, max_completion_length=600, ran 8370 steps total; plateau at step ~1300 (137 new PCs / 1638 total unique PCs), run manually stopped after 8370 steps. Root cause: `kcov_validator` returned empty PC trace for RIFIUTATO → reward_std=0 → zero GRPO gradient. Fixed in commit c8a9d02. |
 | Second RL run | Pipeline fully implemented (reward server, Colab notebook, auto-resume). **Not executed** — experimental phase closed. Documented as future work. |
 | Remote training platform | Colab Pro chosen over Modal — Modal was scoped and abandoned (issues #2–7, closed as not-planned). Colab Pro requires manual ~24h restart but avoids Modal billing complexity. |
 

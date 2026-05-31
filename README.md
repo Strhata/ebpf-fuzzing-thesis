@@ -18,7 +18,7 @@ Data collection → SFT → RL (GRPO) → Coverage evaluation
 |---|---|---|
 | Data collection | ✅ Done | ~2M programs via modified buzzer, 27k curated |
 | SFT (Qwen2.5-Coder-1.5B) | ✅ Done | **60% verifier pass-rate** (vs 1% zero-shot) |
-| GRPO RL run 1 (beta=0.01) | ✅ Done | **1638 total verifier PCs explored** (137 progressively-new per rl_analysis_pcs.csv) in 8370 steps; plateau at step ~1300 — root cause: KCOV bug (see below) |
+| GRPO RL run 1 (beta=0.01) | ✅ Done | **1638 total verifier PCs explored** (137 progressively-new per rl_analysis_pcs.csv); plateau at step ~1300, run stopped at 8370 steps — root cause: KCOV bug (see below) |
 | Reward redesign + Colab pipeline | ✅ Done | Depth-based verdict-blind reward; FastAPI server; Colab notebook with auto-resume |
 | GRPO RL run 2 (depth reward) | 🔬 Future work | Pipeline built, not executed — experimental phase closed |
 
@@ -68,7 +68,7 @@ the assembler.
 | Crash / timeout | SSH timeout | 2.0 |
 | Unparseable | ENCODE_FAIL | 0.0 |
 
-Run 1 plateaued at ~138 cumulative PCs (step ~1300, `reward_std=0`). Root cause discovered
+Run 1 plateaued at 137 new PCs / 1638 total unique PCs (step ~1300, `reward_std=0`). Root cause discovered
 post-run: `kcov_validator` was discarding the KCOV trace for RIFIUTATO programs (returning
 `PCs: []`), making all rejected programs look identical. With GRPO this causes
 `reward_std=0` within each group → zero gradient → no learning.
