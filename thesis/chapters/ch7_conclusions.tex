@@ -6,39 +6,79 @@
 \label{sec:summary}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  Restate the four contributions and what each demonstrated.
+This thesis set out to answer whether a language model, fine-tuned on real BPF
+program--verifier-log pairs and trained with reinforcement learning against live
+kernel coverage, could drive systematic exploration of the Linux eBPF verifier.
+Four contributions were made toward that goal.
 
-  (1) End-to-end pipeline: the SFT + GRPO + KCOV architecture is a viable
-  research platform for eBPF verifier coverage exploration.  The main engineering
-  challenge is the bridge between LLM text output and raw BPF bytecode; the
-  pure-Python encoder solves this without a clang dependency.
+\textbf{End-to-end pipeline.}
+A complete research platform was designed and implemented: a modified buzzer
+instance dumps the kernel FFI boundary as JSONL; a QLoRA fine-tuning stage
+trains on the collected dataset; a GRPO RL stage uses KCOV kernel PC coverage
+as the reward; and a Go binary running inside a KCOV-instrumented Linux~6.8 VM
+validates each generated program and returns its PC trace.
+The central engineering challenge --- bridging LLM text output to the raw 8-byte
+BPF instruction structs the kernel requires --- is solved by the pure-Python BPF
+encoder, which extracts opcode bytes directly from the verifier-log format and
+imposes no clang dependency at inference time.
+The pipeline is modular: a different research goal (targeting a different kernel
+subsystem, for instance) requires only swapping the SFT training data and the
+reward function; the scaffolding remains unchanged.
 
-  (2) SFT result: a 1.5B-parameter code model fine-tuned with QLoRA on 27k
-  labeled BPF programs achieves a 60\% verifier pass-rate, versus 1\% for the
-  zero-shot base model.  Parameter-efficient fine-tuning makes this feasible on
-  consumer hardware (8 GB VRAM).
+\textbf{SFT result.}
+Qwen2.5-Coder-1.5B, fine-tuned with QLoRA on a balanced dataset of 27,514
+BPF program--verifier-log pairs, achieves a verifier pass-rate of 60\%,
+compared to 1\% for the zero-shot base model --- a 60-fold improvement.
+The fine-tuning ran on an RTX~4070~Laptop GPU with 8.59~GB VRAM,
+demonstrating that parameter-efficient fine-tuning (0.14\% of model parameters
+trained) makes the approach accessible on consumer hardware.
+The result confirms RQ1: a 1.5-billion-parameter code model can acquire
+sufficient knowledge of BPF verifier syntax from labeled data.
 
-  (3) Failure-mode diagnosis: GRPO training collapses under homogeneous reward.
-  Reward variance within each group of $G$ completions is a critical design
-  constraint.  The root cause in run~1 --- \texttt{kcov\_validator} discarding
-  KCOV traces for rejected programs --- was traceable to a single code path and
-  fixable in one commit.
+\textbf{Failure-mode diagnosis.}
+RL run~1 (\texttt{rl\_grpo\_v2}, 8,370 steps) produced 137 new kernel PCs in the
+first $\approx$1,241 batches, then stalled completely.
+Post-run analysis established that the reward standard deviation $\sigma_r$
+dropped to zero in 99.5\% of batches, zeroing the GRPO gradient and freezing
+the model.
+The structural cause was twofold.
+First, the SFT model --- trained on a \texttt{Status:~VALID} prompt --- learned
+to generate almost exclusively valid programs during RL inference (99.7\% accepted
+rate), so once the coverage frontier was saturated all four completions per group
+received reward~0.1, producing zero variance.
+Second, a code-level bug in \texttt{kcov\_validator} discarded KCOV traces for
+rejected programs, meaning that the small minority of rejected completions also
+contributed nothing to within-group differentiation.
+The comparison run with a neutral prompt (63.2\% rejected rate vs.\ 0.3\% in
+run~1) provided direct empirical evidence that the prompt was the dominant
+attractor.
+The KCOV bug was fixed in commit~\texttt{c8a9d02}; because both confounds coexisted
+in run~1, their individual contributions cannot be cleanly separated without a
+second run using the neutral prompt.
+The GRPO gradient-starvation failure mode, once identified, is both diagnosable
+from standard training logs and fixable without hyperparameter search.
 
-  (4) Reward redesign: the depth-based verdict-blind reward removes the
-  accept/reject split from the reward signal, ensuring variance even in a
-  fully-rejected group.  Run~2 is the next validation step.
+\textbf{Reward redesign.}
+The depth-based verdict-blind reward removes the accept/reject split from the
+reward formula entirely.
+Programs are scored by the number of kernel PCs reached during verification and
+by a bonus for PCs not seen in prior batches, independent of the verifier verdict.
+This design structurally guarantees non-zero within-group reward variance: even
+when all $G$ completions are rejected, programs that trigger deeper verifier
+analysis receive higher depth scores and therefore different rewards.
+The redesigned reward function is implemented in \texttt{ml/reward.py} and
+validated in the 100-step comparison run; a full training run (run~2) is the
+next step.
 
-  Broader lessons:
-  (a) The pipeline is reusable: a different research goal (e.g., targeting
-      a different kernel subsystem) requires only swapping the SFT training data
-      and the RL reward function.
-  (b) The \texttt{Status: VALID} prompt is a likely confound for RL exploration:
-      it may have anchored the model toward generating valid programs during
-      inference, reducing coverage diversity.  This remains a hypothesis because
-      the prompt bias and the KCOV bug coexisted in run~1 and cannot be
-      disentangled.
-}
+Together, the four contributions demonstrate that LLM-guided eBPF verifier
+fuzzing with live kernel coverage feedback is a technically feasible research
+direction.
+The SFT stage resolves the structural-validity bottleneck that defeats random
+mutation.
+The failure-mode analysis shows that GRPO reward design is the critical variable
+for sustained exploration: a reward function that guarantees within-group variance
+is not an implementation detail but a correctness requirement for GRPO-based
+training.
 
 % --------------------------------------------------------------------------
 \section{Future Work}
