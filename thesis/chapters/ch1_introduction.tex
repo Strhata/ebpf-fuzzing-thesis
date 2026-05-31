@@ -6,74 +6,139 @@
 \label{sec:motivation}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  Introduce eBPF: general-purpose kernel extension framework used by Cilium,
-  Falco, Tetragon, XDP. Programs run inside the kernel at near-native speed.
-  The verifier is the last safety gate before a program enters the kernel.
+The extended Berkeley Packet Filter (eBPF) has become one of the most consequential
+infrastructure technologies in modern Linux systems.
+Originally a packet-filtering mechanism, eBPF has evolved into a general-purpose
+kernel extension framework that allows user-supplied programs to run inside the
+kernel with near-native performance, without requiring kernel modules or source
+modifications.
+Production deployments span a wide range of use cases: Cilium uses eBPF for
+high-performance Kubernetes networking; Falco and Tetragon use it for runtime
+security monitoring; XDP (eXpress Data Path) uses it for line-rate packet
+processing; bpftrace and the Linux perf subsystem use it for low-overhead
+kernel observability.
 
-  One-paragraph supply-chain hook: a single verifier bug allows an adversary
-  to escape the sandbox at full kernel privilege. Cite CVE-2023-2163,
-  CVE-2024-41003, and SoK S\&P 2025~\cite{sok-ebpf} for ``100+ verifier bugs
-  reported in 2024''. Then drop the supply-chain framing --- it appears in this
-  section only, not again.
+Central to this framework is the \emph{verifier}: a static analysis engine of
+approximately 100,000 lines of C code that checks every eBPF program before it is
+allowed to execute.
+The verifier traverses all possible execution paths through the program's control
+flow graph, tracking the type of every register at every program point and
+enforcing memory-safety, type-safety, and termination constraints.
+Only programs that pass this analysis are JIT-compiled and executed at kernel
+privilege.
+The verifier is therefore the primary --- and in many deployment configurations the
+only --- barrier between user-supplied code and the full power of the kernel.
 
-  Close with why fuzzing is hard: programs must pass structural validity checks
-  before the verifier even runs them; random bytecode is nearly always rejected
-  before any interesting code path is reached.
-}
+Logical flaws in the verifier have real consequences.
+CVE-2023-2163 allowed incorrect pointer arithmetic to bypass the verifier's
+register-type tracking, enabling an unprivileged user to read and write arbitrary
+kernel memory.
+CVE-2024-41003 exploited a flaw in the handling of certain instruction sequences
+to achieve a similar effect.
+A recent systematic study of eBPF security reported over 100 verifier-related
+security issues in 2024 alone~\cite{sok-ebpf}.
+Because eBPF programs are loaded via ordinary system calls that are accessible to
+unprivileged users on many default Linux configurations, each such vulnerability
+represents a potential path from a nominally sandboxed process --- a container,
+a package script, a CI agent --- to full kernel code execution.
+Systematically testing the verifier for such flaws is therefore a high-priority
+security research goal.
+
+Coverage-guided fuzzing is the most effective automated technique for finding logic
+bugs in complex software~\cite{afl,syzkaller}.
+Applied to the BPF verifier, the approach would: generate BPF programs, submit
+them via the \texttt{BPF\_PROG\_LOAD} syscall, instrument which kernel code paths
+are executed, and use that feedback to steer generation toward less-explored paths.
+The fundamental challenge is \emph{structural validity}.
+Most random byte sequences fail basic encoding checks --- invalid opcode byte,
+misaligned instruction boundary, unresolvable jump target --- before the verifier
+executes any interesting analysis logic.
+Random mutation is therefore highly inefficient: the fuzzer spends almost all of
+its budget generating programs that are discarded before reaching the code under
+test.
 
 % --------------------------------------------------------------------------
 \section{Problem Statement}
 \label{sec:problem}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  State the gap precisely: no existing system combines LLM-guided eBPF program
-  generation with live KCOV kernel PC coverage as a reinforcement-learning
-  feedback signal for the BPF verifier.
+Existing eBPF fuzzers address the structural-validity problem through hand-crafted
+generation rules.
+Buzzer~\cite{buzzer}, an open-source eBPF fuzzer from Google, implements two
+fixed Go strategies: \texttt{pointer\_arithmetic} and \texttt{coverage\_based}.
+BRF~\cite{brf} uses a constraint-based generator to produce type-correct programs.
+Neither employs a learned model of BPF program structure.
 
-  Existing eBPF fuzzers (buzzer~\cite{buzzer}, BRF~\cite{brf}) do not use LLM
-  generation and buzzer's KCOV integration is display-only (not feedback-driven).
-  Existing LLM fuzzers (CovRL~\cite{covrl}, Fuzz4All~\cite{fuzz4all}) target
-  JavaScript engines or C programs, not the BPF verifier with live kernel instrumentation.
+Buzzer does collect KCOV coverage data from the kernel during its
+\texttt{coverage\_based} runs --- but, as this work discovered, only to
+expose human-readable metrics via an internal HTTP server.
+The coverage information is never used to guide program generation or mutation;
+programs are produced by the same hard-coded Go strategy regardless of which
+kernel paths they have already covered.
+Buzzer is therefore not a coverage-guided fuzzer in the sense of AFL~\cite{afl}:
+there is no feedback loop from coverage observations back to the mutation engine.
 
-  This work fills the gap.
-}
+On the LLM side, recent work has demonstrated that language models can generate
+syntactically valid inputs for fuzzing JavaScript engines~\cite{covrl}, general
+C programs~\cite{fuzz4all}, and syscall interface specifications~\cite{kernelgpt}.
+None of these systems targets BPF bytecode generation, and none uses live kernel
+coverage instrumentation as an RL reward signal.
+
+This identifies a genuine and previously unfilled gap: \textit{no existing system
+combines LLM-guided eBPF program generation with live KCOV kernel PC coverage as
+a reinforcement-learning feedback signal for the BPF verifier.}
+The insight that buzzer's KCOV loop is open --- metrics exposed but not consumed
+--- was the concrete discovery that motivated building this closed loop.
 
 % --------------------------------------------------------------------------
 \section{Contributions}
 \label{sec:contributions}
 % --------------------------------------------------------------------------
 
-This thesis makes the following contributions:
+This thesis makes the following four contributions:
 
 \begin{enumerate}
 
   \item \textbf{End-to-end pipeline.}
-        An SFT + GRPO pipeline that drives a language model with live KCOV kernel
-        PC coverage as an RL reward signal for eBPF verifier exploration.
-        The pipeline is built on top of a modified buzzer data collector and a
-        KCOV-instrumented Linux~6.8 VM.
+        We design and implement a complete pipeline for LLM-guided eBPF verifier
+        fuzzing: a modified buzzer instance dumps BPF programs and verifier outcomes
+        as JSONL at the kernel FFI boundary; a QLoRA fine-tuning stage trains a
+        language model on the resulting dataset; a GRPO RL stage uses KCOV kernel
+        PC coverage as the reward signal; and a Go binary running inside a
+        KCOV-instrumented Linux~6.8 VM validates each generated program and
+        returns its coverage trace.
+        The stages are independently replaceable, making the pipeline reusable for
+        different research goals by swapping the SFT data or the reward function.
 
   \item \textbf{SFT result.}
-        QLoRA fine-tuning of Qwen2.5-Coder-1.5B raises the BPF verifier
-        pass-rate from 1\% (zero-shot base model) to 60\%, demonstrating that a
-        1.5B-parameter model can learn BPF verifier syntax from 27\,k labeled
-        programs.
+        We fine-tune Qwen2.5-Coder-1.5B~\cite{qwen25coder} with QLoRA~\cite{qlora}
+        on a balanced dataset of 27,000 BPF program--verifier-log pairs.
+        The fine-tuned model achieves a verifier pass-rate of 60\%, compared to 1\%
+        for the zero-shot base model, a 60$\times$ improvement.
+        This result confirms that a 1.5-billion-parameter model can acquire
+        BPF verifier syntax from labeled programs using parameter-efficient
+        fine-tuning on consumer hardware (8~GB VRAM).
 
   \item \textbf{Failure-mode diagnosis.}
-        The RL training collapse --- \texttt{reward\_std}${}={}$0 at step
-        $\approx$1300 of 8370 --- is traced to a \texttt{kcov\_validator} bug
-        that discarded the KCOV PC trace for rejected programs.  All rejected
-        programs appeared identical to GRPO, zeroing the gradient signal.  The
-        diagnosis is grounded in the GRPO gradient-starvation literature
-        \cite{grpo-starvation}.
+        We run a GRPO RL training loop (run~1, 8,370 steps) and observe a training
+        collapse: \texttt{reward\_std}${}={}$0 at step~$\approx$1,300, after
+        which coverage exploration stalls at 137 new kernel PCs discovered.
+        Post-run analysis traces the root cause to a single code path in the
+        \texttt{kcov\_validator} binary: KCOV traces were discarded for programs
+        rejected by the verifier, making all rejected programs appear identical to
+        GRPO and zeroing the within-group gradient signal.
+        We ground the diagnosis in the GRPO gradient-starvation
+        literature~\cite{grpo-starvation} and fix the bug.
 
   \item \textbf{Reward redesign.}
-        A depth-based, verdict-blind reward function is proposed and implemented:
-        programs are scored by verifier-path depth and a discovery bonus for
-        new kernel PCs, independent of accept/reject verdict.
-        Run~2 (future work, Chapter~\ref{ch:conclusions}) will validate this redesign.
+        We propose and implement a depth-based, verdict-blind reward function.
+        Programs are scored by the number of kernel PCs reached during verification
+        and by a discovery bonus for PCs not seen in prior batches, independent of
+        whether the verifier accepts or rejects the program.
+        This design guarantees non-zero within-group reward variance even when all
+        completions are rejected, structurally preventing the gradient starvation
+        observed in run~1.
+        A full training run with this reward (run~2) is left as future work.
 
 \end{enumerate}
 
@@ -82,18 +147,21 @@ This thesis makes the following contributions:
 \label{sec:structure}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  Write this section last, once all chapters exist.
-  One sentence per chapter:
-  Chapter~2 provides background on eBPF, KCOV, coverage-guided fuzzing,
-    LLM fine-tuning, and GRPO.
-  Chapter~3 surveys related work in three clusters: eBPF-specific fuzzers,
-    LLM-based fuzzing, and RL for code generation.
-  Chapter~4 describes the methodology, including the buzzer-KCOV discovery
-    and both reward designs.
-  Chapter~5 details the implementation of the BPF encoder, kcov\_validator,
-    training loop, and remote reward pipeline.
-  Chapter~6 presents the experimental results: SFT pass-rate, RL run~1
-    coverage exploration, plateau diagnosis, and reward redesign validation.
-  Chapter~7 draws conclusions and outlines future work.
-}
+Chapter~\ref{ch:background} provides the background necessary to follow the rest
+of the thesis: eBPF architecture and verifier operation, KCOV kernel coverage
+instrumentation, coverage-guided fuzzing, LLM supervised fine-tuning and
+parameter-efficient adaptation, and the GRPO policy-gradient algorithm.
+Chapter~\ref{ch:related-work} surveys prior work in three clusters: eBPF-specific
+fuzzers, LLM-based fuzzing systems, and reinforcement learning for code generation.
+Chapter~\ref{ch:methodology} describes the research methodology: the data
+collection strategy using buzzer, the SFT pipeline design including the assembly
+format decision, and the design and redesign of the RL reward function.
+Chapter~\ref{ch:implementation} details the implementation of the four main
+components: the pure-Python BPF encoder, the \texttt{kcov\_validator} Go binary,
+the GRPO training loop, and the remote reward pipeline for cloud-based training.
+Chapter~\ref{ch:results} presents the experimental results: SFT training dynamics
+and pass-rate evaluation, RL run~1 coverage exploration, plateau diagnosis, and
+reward redesign validation.
+Chapter~\ref{ch:conclusions} draws conclusions from the work, summarises the
+lessons learned about the pipeline and about GRPO reward design, and enumerates
+concrete directions for future work.
