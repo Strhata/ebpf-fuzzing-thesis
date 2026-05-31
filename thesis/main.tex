@@ -1,0 +1,107 @@
+\documentclass[12pt,a4paper,oneside,bibliography=totoc]{scrreprt}
+
+% --------------------------------------------------------------------------
+% Encoding
+% --------------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% --------------------------------------------------------------------------
+% Font: Times New Roman body + math (Vademecum Rev06)
+% --------------------------------------------------------------------------
+\usepackage{mathptmx}
+% KOMA headings in serif (not default sans-serif)
+\addtokomafont{disposition}{\rmfamily}
+
+% --------------------------------------------------------------------------
+% Layout: margins and line spacing (Vademecum Rev06)
+%   left 4 cm / right 2.5 cm / top-bottom 3 cm, A4
+% --------------------------------------------------------------------------
+\usepackage[left=4cm, right=2.5cm, top=3cm, bottom=3cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+
+% --------------------------------------------------------------------------
+% Graphics, tables, code
+% --------------------------------------------------------------------------
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{pdfpages}   % for \includepdf when frontespizio PDF is ready
+
+% --------------------------------------------------------------------------
+% Bibliography: IEEE numbered, in order of citation
+% --------------------------------------------------------------------------
+\usepackage[style=numeric, sorting=none, backend=biber]{biblatex}
+\addbibresource{references.bib}
+
+% --------------------------------------------------------------------------
+% Hyperlinks (load after biblatex)
+% --------------------------------------------------------------------------
+\usepackage[hidelinks]{hyperref}
+\hypersetup{
+  pdftitle  = {Fuzzing the eBPF Verifier via LLM-Guided Program Generation
+               and Reinforcement Learning},
+  pdfauthor = {Stefano Raheli},
+}
+
+% --------------------------------------------------------------------------
+% Code listings
+% --------------------------------------------------------------------------
+\lstset{
+  basicstyle  = \small\ttfamily,
+  breaklines  = true,
+  frame       = single,
+  numbers     = left,
+  numberstyle = \tiny\color{gray},
+  xleftmargin = 2em,
+  framexleftmargin = 2em,
+}
+
+% --------------------------------------------------------------------------
+% Visible TODO marker — remove \textcolor body before final submission
+% --------------------------------------------------------------------------
+\newcommand{\TODO}[1]{\textcolor{red}{\bfseries [TODO: #1]}}
+
+% ==========================================================================
+\begin{document}
+% ==========================================================================
+
+% --------------------------------------------------------------------------
+% Front matter (roman page numbers)
+% --------------------------------------------------------------------------
+\pagenumbering{roman}
+
+% Frontespizio — swap \input{frontespizio} for \includepdf{frontespizio.pdf}
+% once the official DII template PDF is ready
+\input{frontespizio}
+\cleardoublepage
+
+% Abstracts (IT + EN)
+\input{abstract}
+\cleardoublepage
+
+% Table of contents
+\tableofcontents
+\cleardoublepage
+
+% --------------------------------------------------------------------------
+% Main matter (arabic page numbers)
+% --------------------------------------------------------------------------
+\pagenumbering{arabic}
+
+\include{chapters/ch1_introduction}
+\include{chapters/ch2_background}
+\include{chapters/ch3_related_work}
+\include{chapters/ch4_methodology}
+\include{chapters/ch5_implementation}
+\include{chapters/ch6_results}
+\include{chapters/ch7_conclusions}
+
+% --------------------------------------------------------------------------
+% Bibliography
+% --------------------------------------------------------------------------
+\printbibliography[title={References}]
+
+\end{document}

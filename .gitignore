@@ -43,6 +43,20 @@ wandb/
 # Claude Code
 CLAUDE.md
 
+# LaTeX build artifacts
+thesis/*.aux
+thesis/*.log
+thesis/*.out
+thesis/*.toc
+thesis/*.bbl
+thesis/*.blg
+thesis/*.fls
+thesis/*.fdb_latexmk
+thesis/*.synctex.gz
+thesis/*.bcf
+thesis/*.run.xml
+thesis/*.pdf
+
 # Misc
 *.pid
 *.log

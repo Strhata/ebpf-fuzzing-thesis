@@ -1,0 +1,188 @@
+% references.bib
+% Entries marked "TODO: fill" need author / title / pages / DOI before submission.
+% All citations use IEEE numbered style (style=numeric, sorting=none in biblatex).
+
+% --------------------------------------------------------------------------
+% eBPF verifier security
+% --------------------------------------------------------------------------
+
+@inproceedings{sok-ebpf,
+  author    = {TODO: fill},
+  title     = {{SoK}: {eBPF} Security},
+  booktitle = {Proceedings of the IEEE Symposium on Security and Privacy (S\&P)},
+  year      = {2025},
+  note      = {TODO: fill author, pages, DOI.
+               Cited for ``100+ verifier bugs in 2024'', CVE-2023-2163, CVE-2024-41003},
+}
+
+% --------------------------------------------------------------------------
+% eBPF-specific fuzzers
+% --------------------------------------------------------------------------
+
+@misc{buzzer,
+  author = {{Google}},
+  title  = {Buzzer: {eBPF} Fuzzer},
+  year   = {2023},
+  url    = {https://github.com/google/buzzer},
+}
+
+@inproceedings{brf,
+  author    = {TODO: fill},
+  title     = {{BRF}: {eBPF} Runtime Fuzzer},
+  booktitle = {Proceedings of the ACM International Conference on the
+               Foundations of Software Engineering (FSE)},
+  year      = {2024},
+  note      = {TODO: fill author, pages, DOI. Use FSE 2024 venue, not 2023 arXiv preprint},
+}
+
+@inproceedings{bpfchecker,
+  author    = {TODO: fill},
+  title     = {TODO: {BpfChecker} paper title},
+  booktitle = {Proceedings of the ACM Conference on Computer and
+               Communications Security (CCS)},
+  year      = {2024},
+  note      = {TODO: fill author, title, pages, DOI},
+}
+
+@inproceedings{state-embedding,
+  author    = {TODO: fill},
+  title     = {TODO: State Embedding paper title},
+  booktitle = {Proceedings of the USENIX Symposium on Operating Systems
+               Design and Implementation (OSDI)},
+  year      = {2024},
+  note      = {TODO: fill author, title, pages, DOI},
+}
+
+@inproceedings{veritas,
+  author    = {TODO: fill},
+  title     = {TODO: {Veritas} paper title},
+  booktitle = {Proceedings of the ACM Symposium on Operating Systems
+               Principles (SOSP)},
+  year      = {2025},
+  note      = {TODO: pre-publication --- verify proceedings availability before submission},
+}
+
+% --------------------------------------------------------------------------
+% LLM-based fuzzing
+% --------------------------------------------------------------------------
+
+@inproceedings{covrl,
+  author    = {TODO: fill},
+  title     = {{CovRL}: Fuzzing {JavaScript} Engines with Coverage-Guided
+               Reinforcement Learning for {LLM}-based Mutation Operators},
+  booktitle = {Proceedings of the ACM SIGSOFT International Symposium on
+               Software Testing and Analysis (ISSTA)},
+  year      = {2024},
+  note      = {TODO: fill author, pages, DOI. Closest overall prior work},
+}
+
+@inproceedings{fuzz4all,
+  author    = {TODO: fill},
+  title     = {{Fuzz4All}: Universal Fuzzing with Large Language Models},
+  booktitle = {Proceedings of the IEEE/ACM International Conference on
+               Software Engineering (ICSE)},
+  year      = {2024},
+  note      = {TODO: fill author, pages, DOI},
+}
+
+@inproceedings{kernelgpt,
+  author    = {TODO: fill},
+  title     = {{KernelGPT}: Enhanced Kernel Fuzzing via Large Language Models},
+  booktitle = {Proceedings of the International Conference on Architectural
+               Support for Programming Languages and Operating Systems (ASPLOS)},
+  year      = {2025},
+  note      = {TODO: fill author, pages, DOI},
+}
+
+% --------------------------------------------------------------------------
+% RL for code generation
+% --------------------------------------------------------------------------
+
+@inproceedings{coderl,
+  author    = {TODO: fill},
+  title     = {{CodeRL}: Mastering Code Generation through Pretrained Models
+               and Deep Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+  note      = {TODO: fill author, pages},
+}
+
+% --------------------------------------------------------------------------
+% GRPO and reward design
+% --------------------------------------------------------------------------
+
+@article{deepseekmath,
+  author  = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and
+             Junxiao Song and Xiao Bi and Haowei Zhang and Mingchuan Zhang and
+             Y.~K. Li and Y.~Wu and Daya Guo},
+  title   = {{DeepSeekMath}: Pushing the Limits of Mathematical Reasoning in
+             Open Language Models},
+  journal = {arXiv},
+  volume  = {2402.03300},
+  year    = {2024},
+}
+
+@article{grpo-starvation,
+  author  = {TODO: fill},
+  title   = {TODO: arXiv:2605.07689 title},
+  journal = {arXiv},
+  volume  = {2605.07689},
+  year    = {2026},
+  note    = {TODO: fill author and title.
+             Cited for gradient starvation under reward\_std=0 in GRPO},
+}
+
+@article{ngrpo,
+  author  = {TODO: fill},
+  title   = {TODO: arXiv:2509.18851 title},
+  journal = {arXiv},
+  volume  = {2509.18851},
+  year    = {2025},
+  note    = {TODO: fill author and title},
+}
+
+% --------------------------------------------------------------------------
+% Fine-tuning methods
+% --------------------------------------------------------------------------
+
+@article{lora,
+  author  = {Edward J. Hu and Yelong Shen and Phillip Wallis and Zeyuan Allen-Zhu and
+             Yuanzhi Li and Shean Wang and Lu Wang and Weizhu Chen},
+  title   = {{LoRA}: Low-Rank Adaptation of Large Language Models},
+  journal = {arXiv},
+  volume  = {2106.09685},
+  year    = {2021},
+}
+
+@article{qlora,
+  author  = {Tim Dettmers and Artidoro Pagnoni and Ari Holtzman and Luke Zettlemoyer},
+  title   = {{QLoRA}: Efficient Finetuning of Quantized {LLMs}},
+  journal = {arXiv},
+  volume  = {2305.14314},
+  year    = {2023},
+}
+
+@misc{qwen25coder,
+  author = {{Qwen Team}},
+  title  = {{Qwen2.5-Coder} Technical Report},
+  year   = {2024},
+  note   = {arXiv:2409.12186},
+}
+
+% --------------------------------------------------------------------------
+% Coverage-guided fuzzing
+% --------------------------------------------------------------------------
+
+@misc{afl,
+  author = {Michal Zalewski},
+  title  = {{American Fuzzy Lop (AFL)}},
+  year   = {2014},
+  url    = {https://lcamtuf.coredump.cx/afl/},
+}
+
+@misc{syzkaller,
+  author = {Dmitry Vyukov},
+  title  = {syzkaller: an unsupervised coverage-guided kernel fuzzer},
+  year   = {2016},
+  url    = {https://github.com/google/syzkaller},
+}

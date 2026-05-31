@@ -1,0 +1,172 @@
+\chapter{Experimental Results}
+\label{ch:results}
+
+% --------------------------------------------------------------------------
+\section{Supervised Fine-Tuning}
+\label{sec:results-sft}
+% --------------------------------------------------------------------------
+
+\subsection{Training Dynamics}
+\label{sec:sft-training}
+
+\TODO{%
+  Source: \texttt{training\_curated\_3ep\_full.log}, WandB run.
+
+  Plot: eval loss vs.\ training step (0 to 9\,288 steps, 3 complete epochs).
+  Values: loss 0.637 at step~0, converging to 0.557 at step 9\,288.
+  Convergence: loss stabilises from epoch~2 ($\approx$step 6\,000) onward.
+  No overfitting: train and eval loss curves track closely throughout.
+
+  Training configuration:
+  base model Qwen2.5-Coder-1.5B~\cite{qwen25coder},
+  rank-16 QLoRA on Q/K/V/O,
+  effective batch 8 (gradient accumulation),
+  max\_seq\_len 768,
+  learning rate $2 \times 10^{-4}$, AdamW 8-bit,
+  BF16 + FlashAttention-2.
+}
+
+\subsection{Pass-Rate Evaluation}
+\label{sec:passrate}
+
+\TODO{%
+  Evaluation protocol: generate 100 programs (temperature 0.9, greedy-decoding
+  fallback for parse failures); encode via pure-Python BPF encoder; SSH to KCOV VM;
+  run \texttt{kcov\_validator}; count ACCEPTED.
+
+  The comparison is fine-tuned model vs.\ base model with no fine-tuning
+  (zero-shot Qwen2.5-Coder-1.5B).
+  It is \textbf{not} a curated-vs-uncurated dataset comparison --- that experiment
+  was never executed.
+}
+
+\begin{table}[h]
+\centering
+\caption{SFT pass-rate: fine-tuned model vs.\ zero-shot baseline}
+\label{tab:passrate}
+\begin{tabular}{lrrrr}
+\toprule
+Model                    & $N$ & Compiled & Accepted & Pass-rate \\
+\midrule
+curated-merged (SFT)     & 100 & 73       & 60       & 60.0\%    \\
+zero-shot (base model)   & 100 &  1       &  1       &  1.0\%    \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\TODO{%
+  Source: \texttt{results/passrate\_summary.csv},
+  \texttt{results/passrate\_run\_curated.log},
+  \texttt{results/passrate\_run\_zeroshot.log}.
+
+  Interpretation: fine-tuning raises verifier pass-rate from effectively zero
+  to 60\%, confirming RQ1 (Section~\ref{sec:rq}).
+  The 13\% of programs that compiled but were rejected (73 compiled, 60 accepted)
+  contain syntactically valid bytecode that the verifier rejects for semantic
+  reasons --- out-of-bounds access, invalid type coercion, etc.
+  This is expected: the SFT objective is next-token prediction, not verifier
+  satisfaction; the model learned syntax, not full verifier semantics.
+}
+
+% --------------------------------------------------------------------------
+\section{RL Training: Run 1 (\texttt{rl\_grpo\_v2})}
+\label{sec:results-rl}
+% --------------------------------------------------------------------------
+
+\subsection{Coverage Exploration}
+\label{sec:coverage}
+
+\TODO{%
+  Configuration: beta=0.01, $G=4$, max\_completion\_length=600, local GPU
+  (RTX 4070 Laptop, 8.59 GB VRAM).
+  Total steps executed: 8\,370.
+
+  Two distinct PC metrics must be reported clearly:
+  \begin{itemize}
+    \item \textbf{1\,638}: total unique verifier PCs in the cumulative coverage
+          frontier at run end (source: \texttt{results/rl\_pc\_set.json},
+          \texttt{results/rl\_analysis\_pcs.csv}).
+    \item \textbf{137}: progressively-new PCs, i.e., PCs discovered for the
+          first time per batch, summed across the run (source:
+          \texttt{results/rl\_analysis\_pcs.csv}).
+          NOTE: the README states ``138 new PCs'' --- the correct figure from
+          the CSV is 137 (off-by-one in the README, boundary counting artefact).
+  \end{itemize}
+
+  Plot: cumulative new PCs vs.\ training step.
+  Plateau: growth stops at step $\approx$1\,300--1\,381 (batch $\approx$1\,241);
+  no new PCs are discovered in the remaining 7\,000+ steps.
+}
+
+\subsection{Plateau Diagnosis}
+\label{sec:plateau-results}
+
+\TODO{%
+  Evidence from \texttt{results/grpo\_completions.log}:
+  reward distribution collapses to a single value (0.1) for all rejected
+  programs from step $\approx$1\,300 onward.
+  \texttt{reward\_std} computed per batch drops to 0.
+
+  GRPO gradient: $A_i = (r_i - \bar{r}) / \sigma_r$.
+  When $\sigma_r = 0$: no gradient, no parameter update.
+  Run continues consuming compute but the model does not change.
+
+  Root cause confirmed by code inspection: \texttt{kcov\_validator}
+  returned \texttt{pcs:[]} for REJECTED programs (Section~\ref{sec:rl-plateau}).
+  All rejected programs were therefore indistinguishable from one another
+  in GRPO's grouping.
+
+  Literature grounding: the $\sigma_r = 0$ collapse is the gradient starvation
+  failure mode analysed in~\cite{grpo-starvation}.
+
+  Hypothesis (not provable from run~1 data due to simultaneous confounds):
+  the \texttt{Status: VALID} prompt may have biased the model toward generating
+  mostly valid programs during RL inference, reducing within-group diversity.
+  The KCOV bug and the prompt bias coexisted in run~1; they cannot be disentangled
+  without run~2 using a neutral prompt.
+}
+
+% --------------------------------------------------------------------------
+\section{Reward Redesign Validation}
+\label{sec:reward-validation}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  After fixing \texttt{kcov\_validator} (commit c8a9d02), validate the fix with
+  a pre-flight check: feed 25 programs known to be REJECTED through
+  \texttt{kcov\_validator} and confirm that \texttt{pcs} is non-empty for all.
+
+  Report: PC trace lengths for rejected programs (range, median, example values).
+  Expected result: the depth-based reward will assign different scores to these
+  programs proportional to their trace length, producing non-zero \texttt{reward\_std}
+  even in a fully-rejected group.
+
+  Source: add pre-flight log to \texttt{results/} and cite here.
+  If the log does not exist yet, generate it by running \texttt{kcov\_validator}
+  on a sample of rejected programs from \texttt{data/dataset\_final\_qwen.jsonl}.
+}
+
+% --------------------------------------------------------------------------
+\section{Run 2: Planned Experiment}
+\label{sec:run2}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Configuration (planned, not executed):
+  depth-based verdict-blind reward (Section~\ref{sec:reward-redesign}),
+  neutral prompt (no \texttt{Status: VALID} prefix),
+  $G = 8$, max\_completion\_length = 1\,200,
+  Colab Pro (A100).
+
+  Pipeline status: fully implemented and locally tested (Section~\ref{sec:remote-reward}).
+  Not executed --- the experimental phase closed before the July 2026 graduation
+  deadline.
+
+  Expected outcome (hypothesis): the depth-based reward maintains non-zero
+  \texttt{reward\_std} even when all $G$ completions are REJECTED, avoiding the
+  gradient starvation that halted run~1.  The neutral prompt removes the
+  \texttt{Status: VALID} attractor, widening RL exploration.
+
+  Frame as future work (Chapter~\ref{ch:conclusions}).  Do not claim any result
+  that the data cannot support.
+}

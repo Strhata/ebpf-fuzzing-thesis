@@ -1,0 +1,191 @@
+\chapter{Background}
+\label{ch:background}
+
+% --------------------------------------------------------------------------
+\section{eBPF}
+\label{sec:ebpf}
+% --------------------------------------------------------------------------
+
+\subsection{Architecture and Verifier}
+\label{sec:ebpf-arch}
+
+\TODO{%
+  eBPF history: extended from the Berkeley Packet Filter of McCanne \& Jacobson
+  (1993); the ``extended'' version landed in Linux 3.18 (2014) and has grown into
+  a general-purpose kernel extension framework.
+
+  Key components:
+  \begin{itemize}
+    \item Compiler toolchain (clang/LLVM, libbpf, bpftool).
+    \item Loader: BPF\_PROG\_LOAD syscall --- submits bytecode to the verifier.
+    \item Verifier: ~100k lines of C in kernel/bpf/verifier.c; performs abstract
+          interpretation over the CFG before the program is allowed to run.
+    \item JIT compiler: translates verified BPF bytecode to native machine code.
+  \end{itemize}
+
+  BPF ISA: 64-bit fixed-width instructions; 10 general-purpose registers (r0--r9)
+  plus frame pointer r10; stack depth 512 bytes.
+
+  Verifier role: traverses every possible execution path; checks memory safety,
+  type safety, and termination. Accepts or rejects with a human-readable log
+  written to the kernel ring buffer.
+}
+
+\subsection{Safety Guarantees}
+\label{sec:ebpf-safety}
+
+\TODO{%
+  Memory safety: bounds-checked access to BPF maps, stack, and packet data via
+  register type tracking.  Out-of-bounds reads/writes cause verifier rejection.
+
+  Type safety: the verifier tracks register types (scalar, pointer-to-map-value,
+  pointer-to-packet, ctx pointer, \ldots) and rejects type-unsafe operations.
+
+  Termination: back-edge detection (DAG check) ensures no infinite loops in older
+  kernels; bounded loops (Linux 5.3+) require a statically known trip-count
+  verifiable at load time.
+
+  Why the verifier is error-prone: abstract interpretation over an exponential
+  number of path combinations; each new eBPF helper or map type adds new
+  constraints.  Cite SoK S\&P 2025~\cite{sok-ebpf} for quantitative data on
+  verifier CVEs.
+}
+
+\subsection{Industrial Adoption}
+\label{sec:ebpf-adoption}
+
+\TODO{%
+  Key deployed systems:
+  \begin{itemize}
+    \item Cilium: Kubernetes CNI plugin; replaces iptables with eBPF dataplane.
+    \item Falco / Tetragon (Isovalent): runtime security with eBPF-based syscall tracing.
+    \item XDP (eXpress Data Path): packet processing at driver level; used by
+          Cloudflare (DDoS mitigation) and Meta (load balancing).
+    \item Linux perf / bpftrace: observability tooling.
+  \end{itemize}
+
+  Growing adoption raises the security stakes: a verifier bug is a full
+  kernel-privilege escape for any user who can load eBPF programs.
+}
+
+% --------------------------------------------------------------------------
+\section{KCOV: Kernel Coverage Instrumentation}
+\label{sec:kcov}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Kernel feature controlled by CONFIG\_KCOV (Linux 4.6+).
+  Instruments kernel code at compile time with PC-recording callbacks.
+
+  Two trace modes:
+  \begin{itemize}
+    \item KCOV\_TRACE\_PC (value~0): fills a per-task flat array of uint64 program
+          counters.  This project uses KCOV\_TRACE\_PC exclusively.
+          Confirmed via \texttt{linux/include/uapi/linux/kcov.h} (2026-05-17).
+    \item KCOV\_TRACE\_CMP (value~1): records comparison operands for value-feedback
+          fuzzing (not used in this project).
+  \end{itemize}
+
+  Usage model: KCOV fd is opened per-task; the ring-buffer is mmapped from user
+  space.  Coverage is task-local (not global), so it can be attributed to the
+  exact syscall being fuzzed --- in this project, BPF\_PROG\_LOAD.
+
+  Flat PC array layout: element 0 holds the count $n$; elements 1\ldots$n$ hold
+  the recorded PCs.  Maximum size is set at KCOV enable time.
+}
+
+% --------------------------------------------------------------------------
+\section{Coverage-Guided Fuzzing}
+\label{sec:fuzzing}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Core idea: maintain a corpus of inputs; for each new input, measure which
+  branches are newly covered; if new coverage is found, add input to corpus.
+  Feedback loop turns random mutation into directed exploration.
+
+  AFL~\cite{afl}: branch-coverage bitmap, mutation strategies (bit-flips,
+  arithmetic, splicing), and a scoring function to prioritise ``interesting''
+  corpus entries.
+
+  syzkaller~\cite{syzkaller}: syscall-level fuzzer; describes syscall interfaces
+  in a high-level language (syzlang); uses KCOV as the feedback signal; maintains
+  per-program coverage maps.
+
+  Challenge for the BPF verifier: most random bytecode is rejected before the
+  verifier executes any interesting path.  Structural validity (correct instruction
+  encoding, valid register references, correct jump targets) is a prerequisite for
+  any coverage.  This motivates the LLM-guided approach.
+}
+
+% --------------------------------------------------------------------------
+\section{Large Language Models and Fine-Tuning}
+\label{sec:llm}
+% --------------------------------------------------------------------------
+
+\subsection{Supervised Fine-Tuning}
+\label{sec:sft}
+
+\TODO{%
+  SFT: standard next-token prediction loss on a labeled dataset.
+  The model learns the conditional distribution $P(\text{completion} \mid \text{prompt})$.
+
+  Format: in this project the prompt is a verifier-log header
+  (\texttt{Status: VALID | Complexity: N insns}) and the completion is the
+  assembly listing.  The model learns BPF syntax as a sequence-to-sequence task.
+
+  Train/eval protocol: 90/10 split; best checkpoint selected by minimum eval loss.
+}
+
+\subsection{Parameter-Efficient Fine-Tuning: QLoRA}
+\label{sec:qlora}
+
+\TODO{%
+  LoRA~\cite{lora}: freeze pre-trained weight matrices $W_0 \in \mathbb{R}^{d \times k}$;
+  add a low-rank update $\Delta W = B A$ where $B \in \mathbb{R}^{d \times r}$,
+  $A \in \mathbb{R}^{r \times k}$, rank $r \ll \min(d, k)$.
+  Only $A$ and $B$ are trained.  Applied to Q, K, V, O projections of the attention
+  layers.
+
+  QLoRA~\cite{qlora}: base weights in 4-bit NF4 quantization; adapters in BF16.
+  Enables fine-tuning of large models on consumer hardware with minimal quality loss.
+
+  Configuration used in this project:
+  Base model: Qwen2.5-Coder-1.5B~\cite{qwen25coder}.
+  Rank: $r=16$; target projections: Q/K/V/O.
+  Trainable parameters: $\approx 2.1$M out of 1.5B (0.14\%).
+  Hardware: RTX 4070 Laptop, 8.59 GB VRAM.
+}
+
+% --------------------------------------------------------------------------
+\section{Group Relative Policy Optimization}
+\label{sec:grpo}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  GRPO~\cite{deepseekmath}: policy-gradient method for fine-tuning language models
+  on scalar rewards, without a learned value function.
+
+  For each prompt $q$, sample $G$ completions $\{o_1, \ldots, o_G\}$ from the
+  current policy $\pi_\theta$.  Compute rewards $\{r_1, \ldots, r_G\}$.
+  Normalize within the group:
+  \begin{equation}
+    A_i = \frac{r_i - \bar{r}}{\sigma_r}, \quad
+    \bar{r} = \frac{1}{G}\sum_{j=1}^G r_j, \quad
+    \sigma_r = \sqrt{\frac{1}{G}\sum_{j=1}^G (r_j - \bar{r})^2}.
+  \end{equation}
+
+  Key property: $\sigma_r > 0$ is required for a non-zero gradient.
+  If all $G$ completions receive the same reward, $\sigma_r = 0$ and the
+  gradient vanishes --- the gradient starvation failure mode documented in
+  \cite{grpo-starvation}.
+
+  In this project, $G = 4$ completions per prompt during run~1.
+  The KCOV bug described in Section~\ref{sec:rl-plateau} caused exactly this
+  condition: all rejected programs received reward $= 0.1$ with identical
+  (empty) PC traces.
+
+  Contrast with PPO: PPO uses a learned value-function baseline and a single
+  completion per step; GRPO's group-relative normalization eliminates the value
+  function at the cost of requiring within-group reward variance.
+}

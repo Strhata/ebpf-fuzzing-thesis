@@ -1,0 +1,99 @@
+\chapter{Introduction}
+\label{ch:introduction}
+
+% --------------------------------------------------------------------------
+\section{Motivation}
+\label{sec:motivation}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Introduce eBPF: general-purpose kernel extension framework used by Cilium,
+  Falco, Tetragon, XDP. Programs run inside the kernel at near-native speed.
+  The verifier is the last safety gate before a program enters the kernel.
+
+  One-paragraph supply-chain hook: a single verifier bug allows an adversary
+  to escape the sandbox at full kernel privilege. Cite CVE-2023-2163,
+  CVE-2024-41003, and SoK S\&P 2025~\cite{sok-ebpf} for ``100+ verifier bugs
+  reported in 2024''. Then drop the supply-chain framing --- it appears in this
+  section only, not again.
+
+  Close with why fuzzing is hard: programs must pass structural validity checks
+  before the verifier even runs them; random bytecode is nearly always rejected
+  before any interesting code path is reached.
+}
+
+% --------------------------------------------------------------------------
+\section{Problem Statement}
+\label{sec:problem}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  State the gap precisely: no existing system combines LLM-guided eBPF program
+  generation with live KCOV kernel PC coverage as a reinforcement-learning
+  feedback signal for the BPF verifier.
+
+  Existing eBPF fuzzers (buzzer~\cite{buzzer}, BRF~\cite{brf}) do not use LLM
+  generation and buzzer's KCOV integration is display-only (not feedback-driven).
+  Existing LLM fuzzers (CovRL~\cite{covrl}, Fuzz4All~\cite{fuzz4all}) target
+  JavaScript engines or C programs, not the BPF verifier with live kernel instrumentation.
+
+  This work fills the gap.
+}
+
+% --------------------------------------------------------------------------
+\section{Contributions}
+\label{sec:contributions}
+% --------------------------------------------------------------------------
+
+This thesis makes the following contributions:
+
+\begin{enumerate}
+
+  \item \textbf{End-to-end pipeline.}
+        An SFT + GRPO pipeline that drives a language model with live KCOV kernel
+        PC coverage as an RL reward signal for eBPF verifier exploration.
+        The pipeline is built on top of a modified buzzer data collector and a
+        KCOV-instrumented Linux~6.8 VM.
+
+  \item \textbf{SFT result.}
+        QLoRA fine-tuning of Qwen2.5-Coder-1.5B raises the BPF verifier
+        pass-rate from 1\% (zero-shot base model) to 60\%, demonstrating that a
+        1.5B-parameter model can learn BPF verifier syntax from 27\,k labeled
+        programs.
+
+  \item \textbf{Failure-mode diagnosis.}
+        The RL training collapse --- \texttt{reward\_std}${}={}$0 at step
+        $\approx$1300 of 8370 --- is traced to a \texttt{kcov\_validator} bug
+        that discarded the KCOV PC trace for rejected programs.  All rejected
+        programs appeared identical to GRPO, zeroing the gradient signal.  The
+        diagnosis is grounded in the GRPO gradient-starvation literature
+        \cite{grpo-starvation}.
+
+  \item \textbf{Reward redesign.}
+        A depth-based, verdict-blind reward function is proposed and implemented:
+        programs are scored by verifier-path depth and a discovery bonus for
+        new kernel PCs, independent of accept/reject verdict.
+        Run~2 (future work, Chapter~\ref{ch:conclusions}) will validate this redesign.
+
+\end{enumerate}
+
+% --------------------------------------------------------------------------
+\section{Thesis Structure}
+\label{sec:structure}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Write this section last, once all chapters exist.
+  One sentence per chapter:
+  Chapter~2 provides background on eBPF, KCOV, coverage-guided fuzzing,
+    LLM fine-tuning, and GRPO.
+  Chapter~3 surveys related work in three clusters: eBPF-specific fuzzers,
+    LLM-based fuzzing, and RL for code generation.
+  Chapter~4 describes the methodology, including the buzzer-KCOV discovery
+    and both reward designs.
+  Chapter~5 details the implementation of the BPF encoder, kcov\_validator,
+    training loop, and remote reward pipeline.
+  Chapter~6 presents the experimental results: SFT pass-rate, RL run~1
+    coverage exploration, plateau diagnosis, and reward redesign validation.
+  Chapter~7 draws conclusions and outlines future work.
+}

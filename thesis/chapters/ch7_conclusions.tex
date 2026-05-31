@@ -1,0 +1,90 @@
+\chapter{Conclusions}
+\label{ch:conclusions}
+
+% --------------------------------------------------------------------------
+\section{Summary}
+\label{sec:summary}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Restate the four contributions and what each demonstrated.
+
+  (1) End-to-end pipeline: the SFT + GRPO + KCOV architecture is a viable
+  research platform for eBPF verifier coverage exploration.  The main engineering
+  challenge is the bridge between LLM text output and raw BPF bytecode; the
+  pure-Python encoder solves this without a clang dependency.
+
+  (2) SFT result: a 1.5B-parameter code model fine-tuned with QLoRA on 27k
+  labeled BPF programs achieves a 60\% verifier pass-rate, versus 1\% for the
+  zero-shot base model.  Parameter-efficient fine-tuning makes this feasible on
+  consumer hardware (8 GB VRAM).
+
+  (3) Failure-mode diagnosis: GRPO training collapses under homogeneous reward.
+  Reward variance within each group of $G$ completions is a critical design
+  constraint.  The root cause in run~1 --- \texttt{kcov\_validator} discarding
+  KCOV traces for rejected programs --- was traceable to a single code path and
+  fixable in one commit.
+
+  (4) Reward redesign: the depth-based verdict-blind reward removes the
+  accept/reject split from the reward signal, ensuring variance even in a
+  fully-rejected group.  Run~2 is the next validation step.
+
+  Broader lessons:
+  (a) The pipeline is reusable: a different research goal (e.g., targeting
+      a different kernel subsystem) requires only swapping the SFT training data
+      and the RL reward function.
+  (b) The \texttt{Status: VALID} prompt is a likely confound for RL exploration:
+      it may have anchored the model toward generating valid programs during
+      inference, reducing coverage diversity.  This remains a hypothesis because
+      the prompt bias and the KCOV bug coexisted in run~1 and cannot be
+      disentangled.
+}
+
+% --------------------------------------------------------------------------
+\section{Future Work}
+\label{sec:future-work}
+% --------------------------------------------------------------------------
+
+\begin{enumerate}
+
+  \item \textbf{RL run~2.}
+        Execute with the depth-based verdict-blind reward
+        (\texttt{ml/reward.py}) and a neutral prompt; this isolates the prompt
+        bias from the KCOV bug.
+        The Colab Pro remote-reward pipeline (\texttt{ml/train\_grpo\_colab.ipynb},
+        \texttt{tools/reward\_server.py}) is implemented and ready.
+
+  \item \textbf{SFT toward verifier stress.}
+        Retrain with prompts targeting rejected programs or programs that reach
+        deep verifier paths rather than valid programs; evaluate whether this
+        shifts RL exploration away from the valid-program attractor established
+        by the current SFT objective.
+
+  \item \textbf{Curriculum learning.}
+        Staged fine-tuning: a syntax acquisition phase (optimise for valid
+        programs) followed by a stress phase (optimise for rejected or deep-path
+        programs).  This mirrors curriculum learning techniques used in
+        mathematical reasoning models.
+
+  \item \textbf{GRPO reward shaping.}
+        Apply fixed-reference advantage $A = 2r - 1$ \cite{grpo-starvation}
+        to handle binary-reward collapse without relying on within-group
+        reward variance.
+
+  \item \textbf{Scale.}
+        Apply the same pipeline to a 7B-parameter model on cloud GPU; the
+        Colab Pro remote-reward infrastructure is already built for this.
+
+  \item \textbf{Systematic comparison.}
+        Buzzer \texttt{coverage\_based} strategy vs.\ LLM-guided generation at
+        equal wall-clock time, measured in unique verifier PCs explored.
+        This would quantify whether LLM-guided generation provides a coverage
+        advantage over the existing state of the art.
+
+  \item \textbf{Constrained decoding.}
+        Enforce eBPF instruction semantics at generation time (e.g., via a
+        finite-state-machine constraint on the token sequence) to reduce the
+        encode-fail rate and increase the density of reward-eligible programs
+        per training batch.
+
+\end{enumerate}

@@ -1,0 +1,216 @@
+\chapter{Methodology}
+\label{ch:methodology}
+
+% --------------------------------------------------------------------------
+\section{Research Questions}
+\label{sec:rq}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  State three RQs that structure the experimental work:
+
+  \textbf{RQ1:} Can a 1.5B-parameter code model learn to generate syntactically
+  and semantically valid eBPF programs via supervised fine-tuning on a labeled
+  dataset collected from the BPF verifier?
+
+  \textbf{RQ2:} Can a GRPO RL loop with live KCOV kernel PC coverage as reward
+  increase verifier path coverage beyond what the SFT model achieves at
+  inference?
+
+  \textbf{RQ3:} What failure modes arise in GRPO training with live kernel
+  feedback, and how can they be diagnosed and addressed?
+}
+
+% --------------------------------------------------------------------------
+\section{Data Collection: Buzzer and the KCOV Discovery}
+\label{sec:buzzer-data}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Describe buzzer's architecture: Go binary, two strategies, each strategy is a
+  closed Go function that generates bytecode and submits it to the verifier via
+  the kernel FFI (\texttt{ValidateEbpfProgram}).
+
+  The critical discovery: buzzer's \texttt{coverage\_based} strategy calls
+  into KCOV instrumentation and exposes PC counts via an internal HTTP server
+  on port 8080+ID.  The coverage data is human-readable metrics.
+  \textit{It is not used to select or mutate programs.}
+  Programs are generated from the hard-coded Go strategy regardless of which
+  kernel paths they cover.
+
+  Implication: there is no feedback loop closing mutation with coverage.
+  This gap motivated the LLM+GRPO approach: building that feedback loop is
+  a genuine new contribution.
+
+  Modification to buzzer: \texttt{fuzzing/buzzer/pkg/units/ffi.go} was modified
+  (~50 lines) to intercept \texttt{ValidateEbpfProgram} and dump each
+  (bytecode\_hex, verifier\_log, is\_valid, error\_line, error\_reason) tuple
+  as a JSONL line to the shared corpus directory.
+
+  Collection infrastructure: Dockerized single-VM setup (KASAN-only kernel
+  \texttt{bzImage\_kasan}), virtio-9p corpus share, auto-restart on VM crash.
+  Collected $\approx 2$M entries over approximately one week; 30 kernel
+  panic/KASAN dumps captured in \texttt{results/crash\_logs/}.
+}
+
+% --------------------------------------------------------------------------
+\section{SFT Pipeline Design}
+\label{sec:sft-design}
+% --------------------------------------------------------------------------
+
+\subsection{Dataset Curation}
+\label{sec:dataset}
+
+\TODO{%
+  Raw dataset: 2M entries from buzzer.  Error class distribution is highly
+  skewed: a handful of error classes (e.g., ``invalid access to map value'')
+  account for the majority of rejected programs.
+
+  Curation steps:
+  (1) Normalize verifier error text: mask numeric addresses, instruction offsets,
+      and register values to canonical tokens so that distinct error messages
+      differing only in runtime addresses are grouped into the same class.
+  (2) Cap 2\,000 samples per error class to prevent domination by the most
+      frequent class.
+  (3) Include all valid programs (13\,153).
+
+  Final dataset: 27\,514 examples (13\,153 valid + 14\,361 invalid, 26 error
+  classes).  Train/eval split: 90/10.
+  Published on HuggingFace: \texttt{Strhata/ebpf-corpus}.
+}
+
+\subsection{Representation: Assembly Format vs.\ Raw Bytecode}
+\label{sec:format-decision}
+
+\TODO{%
+  Decision: verifier-log assembly format over raw hex bytecode for training.
+
+  Justification from first principles (no peer-reviewed citation was found
+  specifically for LLMs and raw BPF bytecode generation):
+
+  (1) Raw bytecode is an opaque sequence of 8-byte binary tokens with no
+      natural-language grounding.  Each byte position has a different semantic
+      role (opcode, dst/src, offset, imm) that is invisible from the token itself.
+
+  (2) Jump offsets in raw bytecode are positional integers (depend on program
+      layout); they carry no instruction-semantic information.  In verifier-log
+      assembly, jump targets are expressed as relative offsets labelled by the
+      verifier (\texttt{+N} / \texttt{-N}), which the model can learn to track.
+
+  (3) Register semantics (r0--r9 for general purpose, r10 for frame pointer) are
+      explicit in the assembly format and map directly to the type-tracking
+      information that appears in the verifier log.
+
+  (4) The verifier-log format is the exact output of buzzer's data extraction
+      path, requiring no conversion at training time.
+
+  Example of the format used as model output:
+  \begin{lstlisting}[caption={Verifier-log assembly --- five instructions}]
+0: (b7) r1 = 0
+1: (63) *(u32 *)(r10 -4) = r1
+2: (bf) r2 = r10
+3: (07) r2 += -4
+4: (95) exit
+  \end{lstlisting}
+}
+
+% --------------------------------------------------------------------------
+\section{Reinforcement Learning Design}
+\label{sec:rl-design}
+% --------------------------------------------------------------------------
+
+\subsection{Reward Function v1}
+\label{sec:reward-v1}
+
+\TODO{%
+  GRPO configuration for run~1 (\texttt{rl\_grpo\_v2}):
+  $G = 4$ completions per prompt, KL penalty $\beta = 0.01$,
+  max completion length 600 tokens.
+
+  Reward tiers, in order of priority:
+
+  \begin{table}[h]
+  \centering
+  \caption{Reward tiers for RL run~1}
+  \label{tab:reward-v1}
+  \begin{tabular}{llr}
+  \toprule
+  Tier & Condition & Reward \\
+  \midrule
+  Crash / timeout   & SSH timeout; VM may have crashed              & 2.0 \\
+  New kernel PCs    & ACCEPTED + at least one unseen PC             & 1.0 \\
+  Valid, no new PCs & ACCEPTED, all PCs already in frontier         & 0.1 \\
+  Verifier rejected & REJECTED (any reason)                         & 0.1 \\
+  Encode fail       & Output is not parseable BPF assembly          & 0.0 \\
+  \bottomrule
+  \end{tabular}
+  \end{table}
+
+  Rationale: crashes are the highest-value signal (potential verifier bug).
+  New PCs reward exploration.
+  REJECTED and valid-no-new-PCs share value 0.1 to avoid penalising rejection
+  as a hard negative signal --- the verifier rejection is informative about
+  syntax, not about exploration failure.
+}
+
+\subsection{Root Cause: KCOV Bug and \texttt{reward\_std} Collapse}
+\label{sec:rl-plateau}
+
+\TODO{%
+  Observation: RL run~1 (\texttt{rl\_grpo\_v2}) plateaued at step $\approx$1300
+  of 8370 total steps.  Cumulative new PCs stopped growing; \texttt{reward\_std}
+  dropped to 0.
+
+  Post-run root cause analysis:
+  \texttt{kcov\_validator} called \texttt{readPCs()} only when
+  \texttt{verdict == ACCEPTED}.  For REJECTED programs, the function returned
+  \texttt{pcs: []}.
+
+  Consequence: all rejected programs appeared identical to GRPO --- same empty
+  PC set, same reward 0.1.  With most programs being rejected at run~1 inference,
+  all $G = 4$ completions in a group received identical rewards.
+  GRPO advantage $A_i = (r_i - \bar{r}) / \sigma_r = 0 / 0$: gradient is zero.
+
+  Literature: this is the gradient starvation failure mode described
+  in~\cite{grpo-starvation}.  Quote the relevant theorem or proposition here.
+
+  Secondary hypothesis (unverifiable from run~1 data due to simultaneous
+  confounds): the \texttt{Status: VALID} prompt may have biased the model toward
+  generating valid programs during RL inference, reducing the diversity of the
+  $G$ completions.  Both confounds existed simultaneously in run~1; they cannot be
+  separated without a run using a neutral prompt.
+
+  Bug fix: commit c8a9d02 --- \texttt{readPCs()} moved outside the
+  \texttt{if verdict == ACCEPTED} branch.
+}
+
+\subsection{Reward Redesign: Depth-Based Verdict-Blind}
+\label{sec:reward-redesign}
+
+\TODO{%
+  Design principle: the reward must produce non-zero variance within each group
+  of $G$ completions even when all $G$ programs are REJECTED.
+  Verdict (ACCEPTED / REJECTED) is therefore removed from the reward formula.
+
+  Formula:
+  \begin{align}
+    \text{depth} &= \min\!\left(0.5,\; \frac{|\text{pcs}|}{M} \cdot 0.5\right), \\
+    \text{bonus} &= 1.0 \text{ if any PC} \notin S_{\text{snap}}, \text{ else } 0, \\
+    r             &= \text{depth} + \text{bonus},
+  \end{align}
+  where $M = \max\_\text{pcs}\_\text{seen}$ (the largest PC count observed so far,
+  updated after each batch) and $S_{\text{snap}}$ is a snapshot of the cumulative
+  PC set taken \textit{before} the $G$ completions are evaluated.
+
+  The pre-batch snapshot is critical: all $G$ completions compete against the same
+  coverage frontier regardless of evaluation order.
+
+  Special cases: encode\_fail $\to 0.0$; SSH timeout / crash $\to 2.0$.
+
+  Source of variance: even if all $G$ completions are REJECTED, programs that
+  trigger deeper verifier paths (more PCs) receive a higher depth score, providing
+  a gradient signal.
+
+  Implementation: \texttt{ml/reward.py}.  Run~2 will validate whether this
+  redesign resolves the plateau (Section~\ref{sec:run2}).
+}

@@ -1,0 +1,129 @@
+\chapter{Implementation}
+\label{ch:implementation}
+
+% --------------------------------------------------------------------------
+\section{Pure-Python BPF Encoder}
+\label{sec:encoder}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Motivation: the model outputs verifier-log assembly (text); the kernel
+  BPF\_PROG\_LOAD syscall requires raw bytecode (8-byte little-endian structs).
+  The encoder is the bridge.
+
+  Design: parse the verifier-log format \texttt{N: (XX) instruction text}:
+  (1) Extract the two-hex-digit opcode byte \texttt{(XX)}.
+  (2) Parse destination register, source register, signed offset (16-bit),
+      and immediate value (32-bit) from the instruction text.
+  (3) Pack into struct: opcode (1B) | dst\_src (1B) | off (2B) | imm (4B),
+      little-endian.
+
+  No clang dependency at inference time.  Unusual instruction sequences ---
+  unconventional register assignments, non-standard immediate values ---
+  reach the verifier instead of being rejected by the assembler.
+  This is important for fuzzing: the verifier may handle edge cases differently
+  from what clang would generate.
+
+  Encode-fail behaviour: if the instruction text cannot be parsed (e.g., the
+  model output is not valid assembly), the encoder raises an exception caught
+  by the reward function; the program receives reward 0.0.
+
+  Test coverage: 36 unit tests in \texttt{tests/test\_reward\_encoder.py}
+  covering all BPF instruction classes (ALU, JMP, LD, ST, CALL, EXIT), boundary
+  values for immediate and offset fields, and malformed input handling.
+}
+
+% --------------------------------------------------------------------------
+\section{\texttt{kcov\_validator} Go Binary}
+\label{sec:kcov-validator}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Location: \texttt{tools/kcov\_validator/}.
+
+  Interface: accepts BPF bytecode (hex string on stdin), outputs JSON:
+  \begin{lstlisting}[caption={\texttt{kcov\_validator} output format}]
+{"verdict": "ACCEPTED", "pcs": [0xffffffff81..., ...]}
+{"verdict": "REJECTED", "pcs": [0xffffffff81..., ...]}
+  \end{lstlisting}
+
+  Steps executed inside the binary:
+  (1) Open \texttt{/sys/kernel/debug/kcov} fd; mmap the ring buffer.
+  (2) Call \texttt{KCOV\_ENABLE} with \texttt{KCOV\_TRACE\_PC} mode.
+  (3) Decode hex input to raw bytecode; call \texttt{BPF\_PROG\_LOAD} syscall.
+  (4) Call \texttt{KCOV\_DISABLE}.
+  (5) Call \texttt{readPCs()} to extract the PC array: read count from element 0,
+      collect elements 1\ldots$n$ into a JSON array.
+  (6) Return \{verdict, pcs\} to stdout.
+
+  The bug (pre-commit c8a9d02): step 5 was inside
+  \texttt{if verdict == ACCEPTED \{ readPCs() \}}.
+  Fix: step 5 is now unconditional.  Both ACCEPTED and REJECTED programs return
+  their full KCOV trace.
+
+  VM configuration: Debian trixie, Linux 6.8.0 with CONFIG\_KCOV + CONFIG\_KASAN
+  + CONFIG\_UBSAN, QEMU with virtio-9p corpus share.
+}
+
+% --------------------------------------------------------------------------
+\section{GRPO Training Loop}
+\label{sec:grpo-loop}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Script: \texttt{ml/rl\_grpo.py}.
+
+  Framework: TRL 0.14.0 (pinned \texttt{<0.15}) \texttt{GRPOTrainer}.
+  TRL workaround: \texttt{is\_vllm\_available()} in TRL 0.14.0 returns a tuple
+  \texttt{(False, None)} which is truthy in Python.  Patched before import:
+  \texttt{trl.import\_utils.is\_vllm\_available = lambda: False};
+  \texttt{use\_vllm=False} set in \texttt{GRPOConfig}.
+
+  KV cache bug: transformers 5.x + \texttt{gradient\_checkpointing} + \texttt{model.train()}
+  forces \texttt{past\_key\_values=None} in \texttt{Qwen2DecoderLayer}, corrupting
+  autoregressive generation.
+  Fix: \texttt{\_fixed\_unwrap\_model\_for\_generation} wrapper in \texttt{rl\_grpo.py}
+  restores the correct generation mode.
+
+  \texttt{SanityCheckCallback}: fires every 3\,600 s during local training;
+  logs VM reachability (SSH ping), verdict breakdown of the last batch, and
+  cumulative PC count to \texttt{results/sanity\_checks.log}.
+  Automatically disabled when \texttt{--remote-reward-url} is set.
+
+  Auto-resume: \texttt{--resume} flag; detects the latest checkpoint in the
+  output directory and passes it to \texttt{GRPOTrainer}.
+}
+
+% --------------------------------------------------------------------------
+\section{Remote Reward Pipeline}
+\label{sec:remote-reward}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  Motivation: RL training on Colab Pro (T4/A100) with reward evaluation on the
+  local KCOV-instrumented VM (kernel instrumentation cannot run in a cloud VM).
+
+  Components:
+  \begin{enumerate}
+    \item \textbf{\texttt{tools/reward\_server.py}}: FastAPI server that wraps
+          \texttt{ml/reward.py}.  Accepts a POST request with the list of program
+          completions; returns a JSON array of rewards.
+          API key authentication prevents unauthorised queries.
+
+    \item \textbf{Cloudflare Quick Tunnel}: creates a stable HTTPS URL pointing
+          from the Colab VM to the local reward server without requiring port
+          forwarding or a public IP.
+
+    \item \textbf{\texttt{ml/train\_grpo\_colab.ipynb}}: 5-cell Colab notebook.
+          Cell~1 installs dependencies; cell~2 starts the tunnel; cells 3--5
+          launch and optionally resume the training run.
+          ``Run All'' is idempotent.
+  \end{enumerate}
+
+  Reliability design: exponential-backoff retry in \texttt{rl\_grpo.py} handles
+  transient tunnel failures; if the tunnel is unreachable after $N$ retries,
+  the trainer raises and the Colab session logs the failure for manual inspection.
+
+  Status: fully implemented and locally validated.
+  Not executed --- the experimental phase closed before run~2 was launched.
+}

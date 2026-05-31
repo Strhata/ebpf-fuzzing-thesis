@@ -1,0 +1,101 @@
+\chapter{Related Work}
+\label{ch:related-work}
+
+\TODO{%
+  Opening paragraph: three clusters of prior work relate to this thesis.
+  eBPF-specific fuzzers define the target and the state of the art at the
+  system level; LLM-based fuzzers establish the LLM-guided generation paradigm;
+  RL-for-code-generation work provides the algorithmic foundations.
+  No prior work combines all three for the BPF verifier with live kernel
+  coverage feedback.
+}
+
+% --------------------------------------------------------------------------
+\section{eBPF-Specific Fuzzers}
+\label{sec:rw-ebpf}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  \textbf{Buzzer}~\cite{buzzer}: Google open-source eBPF fuzzer, written in Go.
+  Two strategies: \texttt{pointer\_arithmetic} and \texttt{coverage\_based}.
+  The \texttt{coverage\_based} strategy collects KCOV metrics and exposes them via
+  an internal HTTP server, but \textit{does not use coverage to drive mutation}.
+  Programs are generated from hard-coded Go strategies regardless of which kernel
+  code they cover.
+  Role in this project: modified to dump (bytecode\_hex, verifier\_log) pairs as
+  JSONL, used as a data collection vehicle (Section~\ref{sec:buzzer-data}).
+
+  \textbf{BRF}~\cite{brf}: eBPF Runtime Fuzzer, FSE 2024.
+  TODO: describe BRF's approach (type-aware program generation, constraint solving)
+  and how it differs: BRF targets runtime correctness bugs via constraint-guided
+  generation; this work targets verifier path coverage via LLM generation + RL.
+
+  \textbf{BpfChecker}~\cite{bpfchecker}: CCS 2024.
+  TODO: describe and position.
+
+  \textbf{State Embedding}~\cite{state-embedding}: OSDI 2024.
+  TODO: describe and position.
+
+  \textbf{Veritas}~\cite{veritas}: SOSP 2025 (pre-publication).
+  TODO: describe and position (check proceedings availability before submission).
+}
+
+% --------------------------------------------------------------------------
+\section{LLM-Based Fuzzing}
+\label{sec:rw-llm-fuzzing}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  \textbf{CovRL}~\cite{covrl}: ISSTA 2024.
+  \textit{Closest overall prior work.}
+  Applies LLM generation with coverage-guided RL to JavaScript engine fuzzing.
+  The paradigm is the same as this work: a language model generates programs,
+  coverage feedback is used as an RL reward, the policy is updated to explore
+  new paths.
+  Key differences: (1) CovRL targets JS engines with source-level branch coverage;
+  this work targets the Linux BPF verifier with kernel PC coverage via KCOV,
+  requiring live kernel interaction and a purpose-built BPF encoder.
+  (2) CovRL operates on source text directly; this work bridges LLM text output to
+  raw BPF bytecode via a pure-Python encoder that bypasses the assembler.
+  Frame as convergent validation: ``CovRL demonstrates the viability of the
+  LLM + coverage-RL paradigm for language-runtime fuzzing; this work applies
+  the same paradigm to a kernel subsystem target, adding the challenges of live
+  kernel instrumentation and bytecode encoding.''
+
+  \textbf{Fuzz4All}~\cite{fuzz4all}: ICSE 2024.
+  Universal LLM-based fuzzer using an autoprompting paradigm to target multiple
+  languages.
+  TODO: describe key contribution and how it differs from this work.
+
+  \textbf{KernelGPT}~\cite{kernelgpt}: ASPLOS 2025.
+  Uses LLMs to infer syscall interface specifications for syzkaller.
+  Targets the syscall interface at the specification level, not the BPF verifier
+  at the bytecode level.
+  TODO: expand description.
+}
+
+% --------------------------------------------------------------------------
+\section{Reinforcement Learning for Code Generation}
+\label{sec:rw-rl-code}
+% --------------------------------------------------------------------------
+
+\TODO{%
+  \textbf{CodeRL}~\cite{coderl}: NeurIPS 2022.
+  Establishes the paradigm of using execution feedback (unit test results) as RL
+  reward for code-generating LLMs.  The actor-critic architecture uses a learned
+  critic to provide dense reward signals beyond pass/fail.
+  This work differs: CodeRL targets functional correctness on algorithmic problems;
+  this work targets kernel verifier path coverage, which is a continuous rather
+  than binary reward signal.
+
+  \textbf{GRPO gradient starvation}~\cite{grpo-starvation}: arXiv:2605.07689.
+  Analyzes the failure mode in which GRPO produces a zero gradient when reward
+  variance within the group vanishes.  Directly relevant to the plateau diagnosed
+  in Section~\ref{sec:rl-plateau}.
+  TODO: once you have read the paper, summarize the proposed mitigations (e.g.,
+  fixed-reference advantage $A = 2r - 1$).
+
+  \textbf{NGRPO}~\cite{ngrpo}: arXiv:2509.18851.
+  TODO: describe the NGRPO variant and its relevance to reward normalization
+  in this work.
+}
