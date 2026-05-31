@@ -1,6 +1,6 @@
 # Thesis Roadmap — eBPF Fuzzing + ML
 **Target:** July graduation (45-day window). Extend to October if needed.
-**Last updated:** 2026-05-21
+**Last updated:** 2026-05-31
 
 ---
 
@@ -21,9 +21,10 @@
 | KCOV mode | `KCOV_TRACE_PC` (value=0). Confirmed 2026-05-17 via `linux/include/uapi/linux/kcov.h`. Flat uint64 PC array, 1 word per entry. |
 | TRL version | 0.14.0 (pixi-managed, `<0.15` pin). `GRPOTrainer` importable with workaround: patch `trl.import_utils.is_vllm_available = lambda: False` before import, and set `use_vllm=False` in `GRPOConfig`. Root cause: `is_vllm_available()` returns tuple `(False, None)` which is truthy in Python. |
 | BPF encoder | Pure-Python encoder bypasses clang: extracts opcode byte from verifier-log format, packs dst/src/off/imm directly. Programs that would fail clang still reach the verifier. |
-| RL reward tiers | crash→2.0, new_pcs→1.0, valid→0.2, rejected→0.1, encode_fail→0.0. `valid` and `rejected` use distinct values so WandB `rewards.count()` can distinguish them. |
-| RL training run | `rl_grpo_v2`: beta=0.01, G=4, max_completion_length=400, running locally on 8GB GPU. Reached plateau at ~137 cumulative PCs (reward_std=0, all batches returning 0.1). |
-| Second RL run | Planned at beta=0.1 on Colab Pro (T4 GPU). Reward function stays local; exposed via FastAPI + Cloudflare Tunnel. **Not yet implemented.** |
+| RL reward tiers (run 1) | crash→2.0, new_pcs→1.0, valid→0.1, rejected→0.1, encode_fail→0.0. Valid and rejected share value 0.1 but are distinguished by tier label in the log. |
+| RL reward redesign | Depth-based verdict-blind formula after KCOV bug discovery: `depth=min(0.5, pcs/max_pcs_seen*0.5) + 1.0 if new_pcs else 0.0`. RIFIUTATO no longer penalised — only coverage depth matters. Implemented in `ml/reward.py`. |
+| RL training run | `rl_grpo_v2`: beta=0.01, G=4, max_completion_length=600, **stopped** after plateauing at ~138 cumulative PCs. Root cause: `kcov_validator` returned empty PC trace for RIFIUTATO → reward_std=0 → zero GRPO gradient. Fixed in commit c8a9d02. |
+| Second RL run | Pipeline fully implemented (reward server, Colab notebook, auto-resume). **Not executed** — experimental phase closed. Documented as future work. |
 | Remote training platform | Colab Pro chosen over Modal — Modal was scoped and abandoned (issues #2–7, closed as not-planned). Colab Pro requires manual ~24h restart but avoids Modal billing complexity. |
 
 ---
@@ -54,19 +55,21 @@
 - Pipeline: load adapter → generate programs → BPF encoder → SSH to VM → `kcov_validator` → CSV
 - Results in `results/passrate_*.csv`; curated model outperforms baseline
 
-### Phase 4 — RL training (in progress)
-- Script: `ml/rl_grpo.py` — GRPO with KCOV-based reward, running locally
-- Run `rl_grpo_v2`: beta=0.01, G=4, started 2026-05-18, at batch ~6665 as of 2026-05-21
-- Plateau reached at ~137 cumulative PCs; reward_std=0 indicates GRPO signal collapse
-- Analysis: `tools/analyze_rl_run.py` → produces tier CSVs + plots from `results/grpo_completions.log`
-- **Planned:** second run at beta=0.1 on Colab Pro (pending pipeline implementation)
+### Phase 4 — RL training ✅ (local run complete)
+- Script: `ml/rl_grpo.py` — GRPO with KCOV-based reward
+- Run `rl_grpo_v2`: beta=0.01, G=4, T=600 — plateaued at ~138 cumulative PCs; run stopped
+- Root cause identified: `kcov_validator` discarded KCOV trace for RIFIUTATO → reward_std=0 → zero gradient
+- Bug fixed (commit c8a9d02); reward redesigned to depth-based verdict-blind formula
+- Analysis: `tools/analyze_rl_run.py` → tier CSVs + plots from `results/grpo_completions.log`
 
-### Phase 5 — Colab Pro training pipeline (pending)
-- Local reward server (`tools/reward_server.py`) — FastAPI wrapper around `reward.py`, auth via API key
-- Remote reward mode in `ml/rl_grpo.py` — `--remote-reward-url` flag, HTTP calls with retry
-- Auto-resume — automatic checkpoint detection + WandB run ID continuity via `wandb_run_id.txt`
-- Colab notebook (`ml/train_grpo_colab.ipynb`) — mounts Drive, calls `rl_grpo.py` with remote flag
-- See `docs/colab_restart_guide.md` for manual restart procedure
+### Phase 5 — Colab Pro training pipeline ✅ (implemented, not executed — future work)
+- `kcov_validator` fix: returns PCs for RIFIUTATO programs (commit c8a9d02)
+- `ml/reward.py`: depth-based verdict-blind reward + `max_pcs_seen` persistence
+- `tools/reward_server.py`: FastAPI server exposing reward over HTTP, API key auth
+- `ml/rl_grpo.py`: `--remote-reward-url` flag, exponential-backoff retry, `--resume` auto-detect
+- `ml/train_grpo_colab.ipynb`: 5-cell Colab launcher, "Run All" is idempotent
+- Cloudflare Quick Tunnel for stable HTTPS URL from Colab to local reward server
+- Full pipeline ready; no training run executed before experimental phase closed
 
 ---
 
@@ -76,7 +79,7 @@
 ebpf-fuzzing-thesis/
 ├── README.md
 ├── ml/
-│   ├── reward.py                    # KCOV reward function (tiers: crash/new_pcs/valid/rejected/encode_fail)
+│   ├── reward.py                    # KCOV reward function (depth-based verdict-blind; see redesign decision)
 │   ├── rl_grpo.py                   # GRPO RL training script
 │   ├── train.py                     # SFT training script
 │   └── build_baseline_dataset.py
@@ -85,7 +88,7 @@ ebpf-fuzzing-thesis/
 │   ├── classify_crashes.py
 │   ├── evaluate_passrate.py
 │   ├── vm_watchdog.sh
-│   └── kcov_validator/              # C binary: BPF_PROG_LOAD + KCOV → {verdict, pcs:[]} JSON
+│   └── kcov_validator/              # Go binary: BPF_PROG_LOAD + KCOV → {verdict, pcs:[]} JSON
 ├── tests/
 │   ├── test_reward.py               # Reward tier + PC set persistence tests
 │   ├── test_reward_encoder.py       # BPF encoder unit tests

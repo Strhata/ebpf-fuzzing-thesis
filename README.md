@@ -18,8 +18,9 @@ Data collection → SFT → RL (GRPO) → Coverage evaluation
 |---|---|---|
 | Data collection | ✅ Done | ~2M programs via modified buzzer, 27k curated |
 | SFT (Qwen2.5-Coder-1.5B) | ✅ Done | **60% verifier pass-rate** (vs 1% zero-shot) |
-| GRPO RL run 1 (beta=0.01) | ✅ Done | **138 new verifier PCs** discovered in 8370 steps; plateau from step ~1300 due to reward signal collapse |
-| GRPO RL run 2 (beta=0.1) | 🟡 Planned | Colab Pro, depth-based reward redesign |
+| GRPO RL run 1 (beta=0.01) | ✅ Done | **138 new verifier PCs** in 8370 steps; plateau at step ~1300 — root cause: KCOV bug (see below) |
+| Reward redesign + Colab pipeline | ✅ Done | Depth-based verdict-blind reward; FastAPI server; Colab notebook with auto-resume |
+| GRPO RL run 2 (depth reward) | 🔬 Future work | Pipeline built, not executed — experimental phase closed |
 
 ---
 
@@ -50,22 +51,54 @@ See `docs/training_log.md` for full phase history.
 
 GRPO (Group Relative Policy Optimization) with a KCOV-based reward signal.
 The model generates BPF programs; each is validated on a live kernel VM instrumented
-with KCOV. Reward is based on how many new kernel program-counter addresses are reached.
+with KCOV (`KCOV_TRACE_PC`, flat uint64 PC array).
 
 **Key design: pure Python BPF encoder** — the model output (verifier-log assembly format)
 is encoded directly to raw BPF bytecode via `ml/reward.py:_encode_to_hex`, bypassing clang.
 This lets unusual instruction sequences reach the verifier instead of being rejected by
 the assembler.
 
-| Reward tier | Signal | Value |
+#### Initial reward design (run 1, `rl_grpo_v2`)
+
+| Tier | Condition | Value |
 |---|---|---|
-| New PCs discovered | ACCETTATO + unseen kernel PCs | 1.0 |
+| New PCs | ACCETTATO + unseen kernel PCs | 1.0 |
 | Valid, no new PCs | ACCETTATO, PCs already known | 0.1 |
 | Verifier rejected | RIFIUTATO | 0.1 |
-| Kernel crash / timeout | SSH timeout (VM may have crashed) | 2.0 |
-| Unparseable output | ENCODE_FAIL | 0.0 |
+| Crash / timeout | SSH timeout | 2.0 |
+| Unparseable | ENCODE_FAIL | 0.0 |
 
-Current run: `checkpoints/rl_grpo_v2/` — G=4, max_completion=600 tokens, beta=0.01.
+Run 1 plateaued at ~138 cumulative PCs (step ~1300, `reward_std=0`). Root cause discovered
+post-run: `kcov_validator` was discarding the KCOV trace for RIFIUTATO programs (returning
+`PCs: []`), making all rejected programs look identical. With GRPO this causes
+`reward_std=0` within each group → zero gradient → no learning.
+
+#### Redesigned reward (depth-based, verdict-blind)
+
+After fixing `kcov_validator` to return PCs for RIFIUTATO programs:
+
+```
+depth_component = min(0.5, len(pcs) / max_pcs_seen * 0.5)
+discovery_bonus = 1.0  if any PC not in pre-batch snapshot
+reward          = depth_component + discovery_bonus
+
+Special cases:
+  encode_fail → 0.0   (no parseable instructions)
+  crash       → 2.0   (SSH timeout; VM may have crashed)
+```
+
+Verdict (ACCETTATO / RIFIUTATO) does not affect the reward — only coverage depth does.
+This ensures reward variance within each GRPO group even when most programs are rejected.
+
+A pre-batch snapshot (`pc_set_snapshot = frozenset(_pc_set)`) is taken before the loop
+so all G completions compete against the same frontier regardless of evaluation order.
+
+#### Run history
+
+| Run | Config | Steps | Result |
+|---|---|---|---|
+| `rl_grpo_v2` | beta=0.01, G=4, T=600, local GPU | 8370 | 138 PCs; plateaued at ~1300 due to KCOV bug |
+| Run 2 (planned) | beta=0.01, G=8, T=1200, Colab Pro | — | Future work; pipeline ready |
 
 ### 4 — Evaluation
 
@@ -81,22 +114,29 @@ custom kernel 6.8 + KCOV + KASAN.
 ml/
   train.py              # SFT training (QLoRA)
   rl_grpo.py            # GRPO RL training + SanityCheckCallback
-  reward.py             # Reward function: BPF encoder + KCOV-based reward tiers
+  reward.py             # Reward function: BPF encoder + depth-based KCOV reward
+  train_grpo_colab.ipynb  # Colab launcher notebook (auto-resume, remote reward)
+  requirements_colab.txt  # Colab-side pip deps (no torch — pre-installed on Colab)
 tools/
   kcov_validator/       # Go binary: loads BPF program, returns KCOV PC set as JSON
+  reward_server.py      # FastAPI server: exposes reward.py over HTTP with API key auth
   evaluate_passrate.py  # SFT pass-rate evaluation (clang + ebpf_validator)
-  run_comparison.sh     # Token-length comparison orchestration script
+  analyze_rl_run.py     # Parse grpo_completions.log → tier CSVs + plots
   vm_watchdog.sh        # Restarts VM if SSH times out during training
 fuzzing/                # Buzzer fork (modified ffi.go), VM scripts, Docker setup
 data/
   dataset_final_qwen.jsonl   # 27k curated SFT samples (bytecode_hex + verifier_log)
 docs/
   training_log.md       # Full phase history and checkpoints
+  colab_restart_guide.md  # Colab Pro restart procedure
+  cloudflare_tunnel_setup.md  # Local reward server tunnel setup
 tests/
+  test_reward.py            # Depth-based reward + PC set persistence tests
   test_reward_encoder.py    # 36 unit tests for the BPF encoder
+  test_reward_server.py     # FastAPI reward server tests
   test_sanity_callback.py   # 11 unit tests for the training health monitor
 checkpoints/            # Model adapters — large files on HuggingFace (see below)
-results/                # Pass-rate CSVs, reward logs, sanity check reports
+results/                # Pass-rate CSVs, reward logs, PC set, analysis plots
 ```
 
 ---
@@ -108,7 +148,7 @@ results/                # Pass-rate CSVs, reward logs, sanity check reports
 | SFT dataset (`dataset_final_qwen.jsonl`) | [Strhata/ebpf-corpus](https://huggingface.co/datasets/Strhata/ebpf-corpus) |
 | SFT adapter (`curated_3ep_final`) | [Strhata/ebpf-checkpoints](https://huggingface.co/Strhata/ebpf-checkpoints/tree/main/curated_3ep_final) |
 | Merged SFT model (`curated_merged`) | [Strhata/ebpf-checkpoints](https://huggingface.co/Strhata/ebpf-checkpoints/tree/main/curated_merged) |
-| RL checkpoint (`rl_grpo_v2`) | Local only (in progress) |
+| RL checkpoint (`rl_grpo_v2`) | Local only — run stopped at plateau |
 
 ---
 
@@ -129,12 +169,15 @@ pixi run python ml/rl_grpo.py \
   --num-generations 4 \
   --max-completion-length 600 \
   --beta 0.01 \
-  --output-dir checkpoints/rl_grpo_v2
+  --output-dir checkpoints/rl_grpo_v3
 
-# Resume from checkpoint
+# Auto-resume from last checkpoint (also handles fresh start)
 pixi run python ml/rl_grpo.py \
-  --resume-from checkpoints/rl_grpo_v2/checkpoint-1000 \
-  --output-dir checkpoints/rl_grpo_v2
+  --resume \
+  --output-dir checkpoints/rl_grpo_v3
+
+# Remote reward server (for Colab training)
+REWARD_API_KEY=<key> pixi run uvicorn tools.reward_server:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -152,5 +195,9 @@ The opcode byte `(XX)` is extracted directly; dst/src/off/imm are parsed from th
 instruction text. Programs with unusual operands reach the verifier instead of being
 rejected by clang.
 
-**Periodic health checks:** `SanityCheckCallback` fires every hour during training,
+**KCOV bug (run 1):** `kcov_validator` returned `PCs: []` for RIFIUTATO programs.
+Fixed in commit c8a9d02 — `readPCs()` helper now called for both ACCETTATO and RIFIUTATO.
+
+**Periodic health checks:** `SanityCheckCallback` fires every hour during local training,
 logging VM status, verdict breakdown, and cumulative PC count to `results/sanity_checks.log`.
+Disabled automatically in remote-reward mode (`--remote-reward-url`).
