@@ -9,114 +9,175 @@
 \subsection{Architecture and Verifier}
 \label{sec:ebpf-arch}
 
-\TODO{%
-  eBPF history: extended from the Berkeley Packet Filter of McCanne \& Jacobson
-  (1993); the ``extended'' version landed in Linux 3.18 (2014) and has grown into
-  a general-purpose kernel extension framework.
+The Berkeley Packet Filter was originally introduced by McCanne and Jacobson in
+1993 as a virtual machine for network packet filtering in Unix kernels.
+Linux extended the design substantially with the introduction of eBPF in kernel
+version 3.18 (2014), transforming it from a packet-filter-specific mechanism into
+a general-purpose kernel extension framework.
+An eBPF program is a sequence of instructions for a RISC-style virtual machine
+defined by the BPF instruction set architecture: 64-bit fixed-width instructions,
+ten general-purpose registers (r0--r9), a read-only frame pointer (r10), and a
+512-byte stack.
+Programs are loaded into the kernel via the \texttt{BPF\_PROG\_LOAD} system call,
+which triggers the \emph{verifier} before any code is executed.
 
-  Key components:
-  \begin{itemize}
-    \item Compiler toolchain (clang/LLVM, libbpf, bpftool).
-    \item Loader: BPF\_PROG\_LOAD syscall --- submits bytecode to the verifier.
-    \item Verifier: ~100k lines of C in kernel/bpf/verifier.c; performs abstract
-          interpretation over the CFG before the program is allowed to run.
-    \item JIT compiler: translates verified BPF bytecode to native machine code.
-  \end{itemize}
+The verifier is a static analysis engine of approximately 100,000 lines of C code
+in \texttt{kernel/bpf/verifier.c}.
+It performs abstract interpretation over the program's control-flow graph (CFG):
+every possible execution path is traversed, the type and bounds of every register
+are tracked at every program point, and any violation of the safety invariants
+causes an immediate rejection with a human-readable error log written to the kernel
+ring buffer.
+Programs that pass verification are handed to a per-architecture JIT compiler
+that translates BPF bytecode to native machine instructions and pins it in kernel
+memory.
+The verifier therefore occupies the single chokepoint between user-supplied code
+and kernel privilege: a program the verifier accepts executes with full access to
+kernel memory; one that is rejected is discarded without running a single
+instruction.
 
-  BPF ISA: 64-bit fixed-width instructions; 10 general-purpose registers (r0--r9)
-  plus frame pointer r10; stack depth 512 bytes.
-
-  Verifier role: traverses every possible execution path; checks memory safety,
-  type safety, and termination. Accepts or rejects with a human-readable log
-  written to the kernel ring buffer.
-}
+The typical development workflow involves the clang/LLVM toolchain (to compile C
+source to BPF bytecode), libbpf (a loader library that wraps
+\texttt{BPF\_PROG\_LOAD}), and bpftool (a utility for inspecting loaded programs
+and maps).
+The verifier error log is the primary diagnostic interface for BPF developers and
+is also the program representation used in this thesis.
 
 \subsection{Safety Guarantees}
 \label{sec:ebpf-safety}
 
-\TODO{%
-  Memory safety: bounds-checked access to BPF maps, stack, and packet data via
-  register type tracking.  Out-of-bounds reads/writes cause verifier rejection.
+The verifier enforces three classes of safety property.
 
-  Type safety: the verifier tracks register types (scalar, pointer-to-map-value,
-  pointer-to-packet, ctx pointer, \ldots) and rejects type-unsafe operations.
+\emph{Memory safety.}
+The verifier tracks the type of every register value throughout the program: values
+may be scalars, pointers to BPF maps, pointers to packet data, pointers to the
+program context, or pointers to the stack frame.
+Every memory-dereference instruction is checked against the tracked type: only
+pointer-typed values may be dereferenced, and all pointer arithmetic is verified
+against the bounds of the corresponding memory region.
+An access to an out-of-bounds map offset or an unchecked packet pointer causes
+immediate rejection.
 
-  Termination: back-edge detection (DAG check) ensures no infinite loops in older
-  kernels; bounded loops (Linux 5.3+) require a statically known trip-count
-  verifiable at load time.
+\emph{Type safety.}
+Register types are propagated through arithmetic and data-movement instructions
+according to a set of type-combination rules enforced at every instruction.
+Operations on scalar values are permitted freely; pointer arithmetic is allowed
+only in restricted and explicitly verified forms; combining pointer and
+non-pointer values in ways that could conceal an arbitrary memory address is
+rejected.
 
-  Why the verifier is error-prone: abstract interpretation over an exponential
-  number of path combinations; each new eBPF helper or map type adds new
-  constraints.  Cite SoK S\&P 2025~\cite{sok-ebpf} for quantitative data on
-  verifier CVEs.
-}
+\emph{Termination.}
+Older kernels required the CFG to be a DAG (no back edges), guaranteeing
+termination by construction.
+Linux~5.3 introduced support for bounded loops: the verifier proves statically
+that the trip count of each loop is finite and within a configurable limit.
+
+These invariants are maintained through abstract interpretation, which reasons
+about classes of possible runtime values rather than single concrete values.
+The expressiveness required to handle the full range of BPF programs --- complex
+map lookups, helper function return values, conditional pointer checks, and
+arithmetic on unknown offsets --- makes the verifier a large and intricate piece
+of software.
+A systematic study of eBPF security reported over 100 verifier-related security
+issues in 2024 alone~\cite{sok-ebpf}, illustrating that the verifier's complexity
+is a persistent source of exploitable flaws even under active maintenance.
 
 \subsection{Industrial Adoption}
 \label{sec:ebpf-adoption}
 
-\TODO{%
-  Key deployed systems:
-  \begin{itemize}
-    \item Cilium: Kubernetes CNI plugin; replaces iptables with eBPF dataplane.
-    \item Falco / Tetragon (Isovalent): runtime security with eBPF-based syscall tracing.
-    \item XDP (eXpress Data Path): packet processing at driver level; used by
-          Cloudflare (DDoS mitigation) and Meta (load balancing).
-    \item Linux perf / bpftrace: observability tooling.
-  \end{itemize}
+eBPF has seen broad industrial deployment across networking, security, and
+observability.
+Cilium uses eBPF to implement Kubernetes network policies and service routing,
+replacing iptables with a programmable dataplane that processes packets at the
+socket and network-device layers.
+Falco and Tetragon (Isovalent) use eBPF probes to trace system calls at runtime,
+enabling policy enforcement and audit logging without modifying application binaries.
+XDP (eXpress Data Path) attaches eBPF programs at the network-driver level,
+providing packet-processing rates that approach line speed; Cloudflare uses XDP
+for DDoS mitigation, and Meta uses it for load balancing.
+The Linux \texttt{perf} subsystem and bpftrace use eBPF for low-overhead kernel
+observability, replacing custom kernel modules in many profiling and tracing
+scenarios.
 
-  Growing adoption raises the security stakes: a verifier bug is a full
-  kernel-privilege escape for any user who can load eBPF programs.
-}
+The breadth of this deployment amplifies the security stakes.
+A verifier vulnerability is not a local bug: any user who can issue
+\texttt{BPF\_PROG\_LOAD} --- which is permitted to unprivileged users under many
+default Linux configurations --- can exploit it to escalate to kernel privilege.
+Systematically finding such vulnerabilities through automated testing is therefore
+a high-priority research goal.
 
 % --------------------------------------------------------------------------
 \section{KCOV: Kernel Coverage Instrumentation}
 \label{sec:kcov}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  Kernel feature controlled by CONFIG\_KCOV (Linux 4.6+).
-  Instruments kernel code at compile time with PC-recording callbacks.
+KCOV is a kernel subsystem, available since Linux~4.6, that provides per-task
+program-counter coverage tracing for user-space test harnesses.
+When the kernel is compiled with \texttt{CONFIG\_KCOV}, the compiler inserts
+lightweight PC-recording callbacks at the entry of each basic block in the
+kernel text.
 
-  Two trace modes:
-  \begin{itemize}
-    \item KCOV\_TRACE\_PC (value~0): fills a per-task flat array of uint64 program
-          counters.  This project uses KCOV\_TRACE\_PC exclusively.
-          Confirmed via \texttt{linux/include/uapi/linux/kcov.h} (2026-05-17).
-    \item KCOV\_TRACE\_CMP (value~1): records comparison operands for value-feedback
-          fuzzing (not used in this project).
-  \end{itemize}
+KCOV supports two trace modes, defined in
+\texttt{linux/include/uapi/linux/kcov.h}.
+\texttt{KCOV\_TRACE\_PC} (mode value~0) records the program counter of each
+basic block entered by the instrumented thread into a per-task flat array of
+\texttt{uint64} values.
+\texttt{KCOV\_TRACE\_CMP} (mode value~1) additionally records the operands of
+comparison instructions for value-feedback fuzzing, where the operand values
+guide mutation toward satisfying branch conditions.
+This thesis uses \texttt{KCOV\_TRACE\_PC} exclusively.
 
-  Usage model: KCOV fd is opened per-task; the ring-buffer is mmapped from user
-  space.  Coverage is task-local (not global), so it can be attributed to the
-  exact syscall being fuzzed --- in this project, BPF\_PROG\_LOAD.
+The usage model is as follows.
+A user-space process opens the KCOV device (\texttt{/sys/kernel/debug/kcov}),
+calls \texttt{ioctl(KCOV\_ENABLE)} to arm the trace for the current task,
+performs the system call under test, and calls \texttt{ioctl(KCOV\_DISABLE)} to
+stop tracing.
+The ring buffer is mmapped from user space; element~0 holds the count $n$ of
+recorded entries, and elements~$1,\ldots,n$ hold the raw kernel program counters.
 
-  Flat PC array layout: element 0 holds the count $n$; elements 1\ldots$n$ hold
-  the recorded PCs.  Maximum size is set at KCOV enable time.
-}
+Coverage is task-local: only code executed by the calling thread between the
+enable and disable calls is recorded, without noise from concurrent kernel threads.
+This property is critical for attribution: in this project the instrumented system
+call is \texttt{BPF\_PROG\_LOAD}, so every KCOV trace captures exactly the
+verifier code paths exercised by one BPF program load attempt.
 
 % --------------------------------------------------------------------------
 \section{Coverage-Guided Fuzzing}
 \label{sec:fuzzing}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  Core idea: maintain a corpus of inputs; for each new input, measure which
-  branches are newly covered; if new coverage is found, add input to corpus.
-  Feedback loop turns random mutation into directed exploration.
+Coverage-guided fuzzing is the dominant automated technique for finding logic
+bugs in complex software~\cite{afl,syzkaller}.
+The core feedback loop maintains a corpus of inputs; for each new input, it
+measures which code paths (branches, basic blocks, or program counters) are
+executed; if the input exercises a path not seen in any prior corpus entry, it is
+added to the corpus and used as a seed for future mutation.
+This loop turns undirected random mutation into directed exploration: effort is
+naturally concentrated on regions of the input space that expose new code paths.
 
-  AFL~\cite{afl}: branch-coverage bitmap, mutation strategies (bit-flips,
-  arithmetic, splicing), and a scoring function to prioritise ``interesting''
-  corpus entries.
+AFL~\cite{afl} popularised coverage-guided fuzzing for user-space programs.
+AFL encodes branch coverage as a bitmap indexed by (source, destination) edge
+pairs; an input is considered interesting if it sets any previously-zero byte
+in the bitmap.
+AFL's mutation strategies --- bit-flips, arithmetic increments, block splices,
+and dictionary-guided substitutions --- are applied to corpus entries weighted
+by a scoring function that favours shorter and faster inputs.
 
-  syzkaller~\cite{syzkaller}: syscall-level fuzzer; describes syscall interfaces
-  in a high-level language (syzlang); uses KCOV as the feedback signal; maintains
-  per-program coverage maps.
+syzkaller~\cite{syzkaller} applies the same paradigm to the Linux kernel's
+system-call interface.
+Syscall type signatures are described in a domain-specific language (syzlang),
+which the fuzzer uses to generate structurally valid syscall sequences.
+KCOV provides the coverage feedback signal, closing the same loop that AFL
+closes for user-space programs.
 
-  Challenge for the BPF verifier: most random bytecode is rejected before the
-  verifier executes any interesting path.  Structural validity (correct instruction
-  encoding, valid register references, correct jump targets) is a prerequisite for
-  any coverage.  This motivates the LLM-guided approach.
-}
+Applying coverage-guided fuzzing to the BPF verifier faces the structural-validity
+bottleneck described in Chapter~\ref{ch:introduction}: most randomly constructed
+byte sequences fail basic instruction-encoding checks before the verifier performs
+any interesting analysis, leaving the coverage signal sparse and uninformative.
+Generating programs that reliably reach deep verifier paths requires knowledge of
+the BPF ISA encoding rules, register-type constraints, and jump-target semantics
+--- knowledge that a language model fine-tuned on real BPF programs can acquire
+from data rather than from hand-written rules.
 
 % --------------------------------------------------------------------------
 \section{Large Language Models and Fine-Tuning}
@@ -126,66 +187,121 @@
 \subsection{Supervised Fine-Tuning}
 \label{sec:sft}
 
-\TODO{%
-  SFT: standard next-token prediction loss on a labeled dataset.
-  The model learns the conditional distribution $P(\text{completion} \mid \text{prompt})$.
+A large language model (LLM) is a neural network trained on large text corpora to
+model the joint probability distribution over token sequences.
+At inference time the model generates completions autoregressively by sampling
+from the conditional distribution $P(y_t \mid y_{<t}, x)$, where $x$ is the
+prompt and $y_{<t}$ is the completion generated so far.
+A pre-trained model acquires broad statistical regularities of natural and
+programming language and can generate plausible completions without task-specific
+training --- a capability known as zero-shot generation.
 
-  Format: in this project the prompt is a verifier-log header
-  (\texttt{Status: VALID | Complexity: N insns}) and the completion is the
-  assembly listing.  The model learns BPF syntax as a sequence-to-sequence task.
+Supervised fine-tuning (SFT) adapts a pre-trained model to a specific task by
+continuing training on a labeled dataset of (prompt, completion) pairs using the
+standard next-token-prediction objective:
+\begin{equation}
+  \mathcal{L}_{\mathrm{SFT}}
+    = -\sum_{t} \log P_\theta\!\left(y_t \mid y_{<t},\, x\right),
+\end{equation}
+where $\theta$ are the model parameters.
+The model learns to imitate the conditional distribution of completions given
+prompts in the training set.
 
-  Train/eval protocol: 90/10 split; best checkpoint selected by minimum eval loss.
-}
+In this project, each training example consists of a short header prompt
+(e.g., \texttt{Status: VALID | Complexity: N insns}) paired with a BPF
+verifier-log assembly listing as the completion.
+SFT trains the model to generate valid BPF assembly conditioned on a complexity
+header, transferring BPF syntax from the labeled dataset into the model's
+weights.
+The dataset is split 90/10 for training and evaluation; the best checkpoint is
+selected by minimum evaluation loss.
 
 \subsection{Parameter-Efficient Fine-Tuning: QLoRA}
 \label{sec:qlora}
 
-\TODO{%
-  LoRA~\cite{lora}: freeze pre-trained weight matrices $W_0 \in \mathbb{R}^{d \times k}$;
-  add a low-rank update $\Delta W = B A$ where $B \in \mathbb{R}^{d \times r}$,
-  $A \in \mathbb{R}^{r \times k}$, rank $r \ll \min(d, k)$.
-  Only $A$ and $B$ are trained.  Applied to Q, K, V, O projections of the attention
-  layers.
+Full fine-tuning updates all model parameters and requires GPU memory proportional
+to the parameter count.
+For billion-scale models this exceeds the capacity of consumer hardware.
+Parameter-efficient fine-tuning (PEFT) methods address this by training a small
+number of additional parameters while keeping the base model frozen.
 
-  QLoRA~\cite{qlora}: base weights in 4-bit NF4 quantization; adapters in BF16.
-  Enables fine-tuning of large models on consumer hardware with minimal quality loss.
+LoRA~\cite{lora} (Low-Rank Adaptation) inserts a low-rank update alongside each
+frozen weight matrix.
+For a pre-trained weight $W_0 \in \mathbb{R}^{d \times k}$, LoRA adds:
+\begin{equation}
+  \Delta W = B A, \quad
+  B \in \mathbb{R}^{d \times r},\quad
+  A \in \mathbb{R}^{r \times k},\quad
+  r \ll \min(d, k).
+\end{equation}
+Only $A$ and $B$ are trained; $W_0$ remains fixed.
+The effective weight during a forward pass is $W_0 + \Delta W$.
+LoRA is typically applied to the query~(Q), key~(K), value~(V), and output
+projection~(O) matrices of the attention layers.
 
-  Configuration used in this project:
-  Base model: Qwen2.5-Coder-1.5B~\cite{qwen25coder}.
-  Rank: $r=16$; target projections: Q/K/V/O.
-  Trainable parameters: $\approx 2.1$M out of 1.5B (0.14\%).
-  Hardware: RTX 4070 Laptop, 8.59 GB VRAM.
-}
+QLoRA~\cite{qlora} extends LoRA to quantised base weights.
+The frozen base model is stored in 4-bit NF4 (normalised float~4) quantisation,
+reducing its memory footprint to approximately one quarter of 16-bit storage;
+the low-rank adapters are stored in BF16.
+During training, base weights are dequantised on-the-fly for each matrix multiply.
+The combination allows a billion-parameter model to be fine-tuned on a single
+consumer GPU.
+
+In this project, the base model is Qwen2.5-Coder-1.5B~\cite{qwen25coder}, a
+1.5-billion-parameter code language model.
+QLoRA is applied at rank $r = 16$ to the Q, K, V, and O projections of all
+attention layers, yielding approximately 2.1~million trainable parameters out of
+1.5~billion total (0.14\%).
+Training runs on an RTX~4070~Laptop GPU with 8.59~GB VRAM --- well below the
+capacity required for full fine-tuning of a model of this size.
 
 % --------------------------------------------------------------------------
 \section{Group Relative Policy Optimization}
 \label{sec:grpo}
 % --------------------------------------------------------------------------
 
-\TODO{%
-  GRPO~\cite{deepseekmath}: policy-gradient method for fine-tuning language models
-  on scalar rewards, without a learned value function.
+Reinforcement learning can be used to fine-tune a language model to maximise a
+scalar reward signal rather than to imitate a labeled dataset.
+This is useful when the quality of a completion is easier to measure than to
+demonstrate: verifier acceptance, code correctness, or, as in this project,
+kernel coverage depth.
 
-  For each prompt $q$, sample $G$ completions $\{o_1, \ldots, o_G\}$ from the
-  current policy $\pi_\theta$.  Compute rewards $\{r_1, \ldots, r_G\}$.
-  Normalize within the group:
-  \begin{equation}
-    A_i = \frac{r_i - \bar{r}}{\sigma_r}, \quad
-    \bar{r} = \frac{1}{G}\sum_{j=1}^G r_j, \quad
-    \sigma_r = \sqrt{\frac{1}{G}\sum_{j=1}^G (r_j - \bar{r})^2}.
-  \end{equation}
+GRPO (Group Relative Policy Optimization)~\cite{deepseekmath} is a
+policy-gradient algorithm designed for language model fine-tuning that eliminates
+the learned value-function baseline required by standard RLHF algorithms.
+For each training prompt $q$, the current policy $\pi_\theta$ generates a group
+of $G$ completions $\{o_1, \ldots, o_G\}$.
+A reward function evaluates each completion and returns scores
+$\{r_1, \ldots, r_G\}$.
+The \emph{group-relative advantage} of completion $i$ is defined as:
+\begin{equation}
+  A_i = \frac{r_i - \bar{r}}{\sigma_r}, \quad
+  \bar{r} = \frac{1}{G}\sum_{j=1}^G r_j, \quad
+  \sigma_r = \sqrt{\frac{1}{G}\sum_{j=1}^G (r_j - \bar{r})^2}.
+  \label{eq:grpo-advantage}
+\end{equation}
+The policy is updated to increase the probability of completions with positive
+advantage ($r_i > \bar{r}$) and decrease the probability of those with negative
+advantage ($r_i < \bar{r}$), subject to a KL-divergence penalty against a frozen
+reference policy.
+Because the baseline is computed from the group itself rather than from a separate
+value network, GRPO requires only a single model in memory at training time.
 
-  Key property: $\sigma_r > 0$ is required for a non-zero gradient.
-  If all $G$ completions receive the same reward, $\sigma_r = 0$ and the
-  gradient vanishes --- the gradient starvation failure mode documented in
-  \cite{grpo-starvation}.
+A critical constraint follows directly from Equation~(\ref{eq:grpo-advantage}):
+$\sigma_r > 0$ is required for a non-zero policy gradient.
+If every completion in a group receives the same reward, $\sigma_r = 0$, all
+advantages vanish, and the parameter update is identically zero.
+The model does not change; the training loop continues consuming compute while
+making no progress.
+This failure mode --- gradient starvation under homogeneous reward --- is
+documented and analysed in~\cite{grpo-starvation}.
 
-  In this project, $G = 4$ completions per prompt during run~1.
-  The KCOV bug described in Section~\ref{sec:rl-plateau} caused exactly this
-  condition: all rejected programs received reward $= 0.1$ with identical
-  (empty) PC traces.
-
-  Contrast with PPO: PPO uses a learned value-function baseline and a single
-  completion per step; GRPO's group-relative normalization eliminates the value
-  function at the cost of requiring within-group reward variance.
-}
+In this project, GRPO is used with $G = 4$ completions per prompt during RL
+run~1.
+The reward function must produce sufficiently varied scores within each group for
+the within-group variance $\sigma_r^2$ to remain positive throughout training.
+As Chapter~\ref{ch:results} shows, this condition was violated in run~1 due to a
+bug in the reward pipeline, leading to exactly the gradient starvation described
+above.
+The diagnosis and the reward redesign that addresses it are detailed in
+Chapters~\ref{ch:methodology} and~\ref{ch:results}.
