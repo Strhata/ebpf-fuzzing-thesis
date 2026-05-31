@@ -1,249 +1,244 @@
-# Recap tesi — Fuzzing del verifier eBPF
+# Thesis Recap — eBPF Verifier Fuzzing
 
-> Documento ricostruito dai file in `/home/stefano-u/fuzzing_lab/` e `/home/stefano-u/fuzzing_ml_env/`
-> e dalle annotazioni in `note.txt`. Serve come recap personale e come base per la stesura della tesi.
-> Due sezioni richiedono un intervento manuale: sono marcate con **[DA COMPLETARE]**.
-
----
-
-## 1. Obiettivo iniziale
-
-Il relatore ha chiesto di fare fuzzing del **verifier eBPF del kernel Linux usando AFL**.
-Questo è il mio primo lavoro di ricerca: parte della narrazione qui sotto è proprio la
-curva di apprendimento — scelte che col senno di poi cambierei, e cambi di rotta
-motivati dall'aver capito strada facendo cosa stavo usando davvero.
+> Document reconstructed from files in `/home/stefano-u/fuzzing_lab/` and `/home/stefano-u/fuzzing_ml_env/`
+> and from annotations in `note.txt`. Used as a personal recap and as a reference for writing the thesis.
 
 ---
 
-## 2. Buzzer — cosa è e come è stato usato
+## 1. Initial Goal
 
-- **Cos'è:** [buzzer](https://github.com/google/buzzer) è un fuzzer eBPF **standalone**
-  scritto in Go da Google, con strategie proprie (`--strategy=pointer_arithmetic`,
-  `--strategy=coverage_based`). Non è un wrapper AFL.
-- **Modalità smart e KCOV:** la modalità `coverage_based` di buzzer usa KCOV, ma solo
-  per raccogliere metriche human-readable esposte via HTTP server — **non** come segnale
-  di feedback per guidare la mutazione. Non è un loop coverage-guided nel senso AFL.
-- **Scoperta chiave:** questa limitazione (KCOV usato solo per display, non per feedback)
-  è stata il trigger del pivot verso l'approccio LLM+GRPO: se buzzer non usa la
-  coverage come segnale di mutazione, costruire un loop RL con KCOV come reward è
-  un contributo genuinamente nuovo.
-- **Ruolo nel progetto:** buzzer è stato usato come **generatore di dati** — modificato
-  in `ffi.go` per dumpare ogni coppia `(bytecode_hex, verifier_log)` — non come fuzzer
-  principale.
+The relatore asked to fuzz the **Linux kernel eBPF verifier**.
+This is my first research project: part of the narrative below describes the learning curve —
+choices I would make differently in hindsight, and pivots motivated by understanding what
+I was actually working with along the way.
 
 ---
 
-## 3. Fase 1 — Infrastruttura VM/kernel (1–3 marzo)
+## 2. Buzzer — what it is and how it was used
 
-- [`create-image.sh`](fuzzing_lab/create-image.sh) adattato da syzkaller → immagini
-  Debian `bullseye.img` e `trixie.img` (~2 GB ciascuna) con chiavi SSH per root
-  passwordless.
-- Sorgenti di **Linux 6.8.0** in `fuzzing_lab/linux/`, compilati in tre varianti:
-  - `bzImage` — kernel standard
-  - `bzImage_kasan` — **KCOV disattivato**, baseline di throughput del fuzzer
-  - `bzImage_kasan_kcov` — **KCOV + KASAN + UBSAN** attivi, coverage-guided
-- [`note.txt`](fuzzing_lab/note.txt) contiene le linee di comando QEMU provate,
-  incluso il montaggio via `virtfs` 9p per condividere kernel e corpus col guest.
+- **What it is:** [buzzer](https://github.com/google/buzzer) is a **standalone** eBPF fuzzer
+  written in Go by Google, with its own strategies (`--strategy=pointer_arithmetic`,
+  `--strategy=coverage_based`). It is not an AFL wrapper.
+- **Smart mode and KCOV:** buzzer's `coverage_based` mode uses KCOV, but only
+  to collect human-readable metrics exposed via an HTTP server — **not** as a
+  feedback signal to drive mutation. It is not a coverage-guided loop in the AFL sense.
+- **Key discovery:** this limitation (KCOV used only for display, not for feedback)
+  was the trigger for the pivot to the LLM+GRPO approach: if buzzer does not use
+  coverage as a mutation signal, building an RL loop with KCOV as the reward is
+  a genuinely new contribution.
+- **Role in the project:** buzzer was used as a **data generator** — modified
+  in `ffi.go` to dump every `(bytecode_hex, verifier_log)` pair — not as the
+  primary fuzzer.
 
 ---
 
-## 4. Fase 2 — Run con buzzer e swarm (5–10 marzo)
+## 3. Phase 1 — VM/kernel infrastructure (1–3 March)
 
-Script runner in `fuzzing_lab/`:
+- [`create-image.sh`](fuzzing_lab/create-image.sh) adapted from syzkaller → Debian
+  images `bullseye.img` and `trixie.img` (~2 GB each) with SSH keys for passwordless root.
+- **Linux 6.8.0** sources in `fuzzing_lab/linux/`, compiled in three variants:
+  - `bzImage` — standard kernel
+  - `bzImage_kasan` — **KCOV disabled**, fuzzer throughput baseline
+  - `bzImage_kasan_kcov` — **KCOV + KASAN + UBSAN** enabled, coverage-guided
+- [`note.txt`](fuzzing_lab/note.txt) contains the QEMU command lines tried,
+  including `virtfs` 9p mounting for sharing the kernel and corpus with the guest.
 
-| Script | Ruolo |
-|--------|-------|
-| [`start_swarm.sh`](fuzzing_lab/start_swarm.sh) | Lancia 3 VM QEMU in parallelo, con auto-restart on crash |
-| [`run_node.sh`](fuzzing_lab/run_node.sh) | Runner con flag `-b` (blind) / `-s` (smart); carica `buzzer` e `vmlinux` nel guest |
-| [`run_smart.sh`](fuzzing_lab/run_smart.sh) | Modalità smart con UI metriche su porta `8080 + ID` |
-| [`run_fake.sh`](fuzzing_lab/run_fake.sh) | Sanity check con `vmlinux` fasullo, per isolare problemi di coverage |
+---
 
-Tentativi di profiling (per capire dove si spendevano i cicli):
+## 4. Phase 2 — Buzzer and swarm runs (5–10 March)
+
+Runner scripts in `fuzzing_lab/`:
+
+| Script | Role |
+|--------|------|
+| [`start_swarm.sh`](fuzzing_lab/start_swarm.sh) | Launches 3 QEMU VMs in parallel with auto-restart on crash |
+| [`run_node.sh`](fuzzing_lab/run_node.sh) | Runner with `-b` (blind) / `-s` (smart) flag; copies `buzzer` and `vmlinux` into the guest |
+| [`run_smart.sh`](fuzzing_lab/run_smart.sh) | Smart mode with metrics UI on port `8080 + ID` |
+| [`run_fake.sh`](fuzzing_lab/run_fake.sh) | Sanity check with a dummy `vmlinux`, to isolate coverage problems |
+
+Profiling attempts (to find where cycles were being spent):
 
 - [`diagnose1.sh`](fuzzing_lab/diagnose1.sh), [`diagnose2.sh`](fuzzing_lab/diagnose2.sh),
   [`diagnose3.sh`](fuzzing_lab/diagnose3.sh), [`diagnose_bottleneck.sh`](fuzzing_lab/diagnose_bottleneck.sh)
   → `strace`, `perf`, `GODEBUG=gctrace,schedtrace`.
-- Output raccolti in `fuzzing_lab/diagnostic_data/`.
+- Output collected in `fuzzing_lab/diagnostic_data/`.
 
-Risultati raccolti:
+Results collected:
 
-- **`crash_logs/`** — 30 dump di kernel panic / KASAN (4–5 marzo), distribuiti
-  sulle 4 VM attive (`vm1…vm4_log.txt`).
+- **`crash_logs/`** — 30 kernel panic / KASAN dumps (4–5 March), spread
+  across the 4 active VMs (`vm1…vm4_log.txt`).
 
 ---
 
-## 5. Fase 3 — Containerizzazione (26–29 marzo)
+## 5. Phase 3 — Containerisation (26–29 March)
 
-Per rendere riproducibile il setup e poter scalare i nodi:
+To make the setup reproducible and scalable:
 
 - [`Dockerfile`](fuzzing_lab/Dockerfile) + [`entrypoint.sh`](fuzzing_lab/entrypoint.sh) →
-  container che lancia QEMU **annidato** (`--device /dev/kvm`), aspetta SSH, poi esegue
+  container that launches **nested** QEMU (`--device /dev/kvm`), waits for SSH, then runs
   `/mnt/corpus/buzzer --strategy=pointer_arithmetic`.
-- Corpus condiviso host ↔ guest tramite **virtio-9p**.
-- Il container è `fuzzer_node_1` (nome referenziato in `rotate_log.txt` e in `note.txt`).
+- Corpus shared host ↔ guest via **virtio-9p**.
+- The container is `fuzzer_node_1` (name referenced in `rotate_log.txt` and `note.txt`).
 
 ---
 
-## 6. Fase 4 — Pivot: generazione di programmi eBPF con un LLM (27 marzo → 16 aprile)
+## 6. Phase 4 — Pivot: eBPF program generation with an LLM (27 March → 16 April)
 
-Tutto il lavoro ML vive in `fuzzing_ml_env/`.
+All ML work lives in `fuzzing_ml_env/`.
 
-### Motivazione del pivot
+### Pivot motivation
 
-La scoperta determinante è stata capire come buzzer usa KCOV. La modalità
-`coverage_based` espone le metriche di copertura via un HTTP server interno — il
-dato è leggibile dall'operatore ma **non viene usato per guidare la mutazione**.
-Buzzer genera programmi in base a strategie hard-coded in Go, non in risposta a
-quale codice del kernel sta coprendo.
+The decisive discovery was understanding how buzzer uses KCOV. The `coverage_based` mode
+exposes coverage metrics via an internal HTTP server — the data is human-readable but
+**is not used to guide mutation**. Buzzer generates programs based on hard-coded Go
+strategies, not in response to which kernel code it is covering.
 
-Questo ha evidenziato un gap reale: nessun sistema esistente combinava generazione
-LLM di programmi eBPF con il segnale KCOV come reward per RL. Usare buzzer come
-raccoglitore di dati (2M entry di `bytecode_hex + verifier_log`) e poi addestrare
-un LLM con GRPO e reward basato su KCOV era un approccio nuovo e vale la pena
-investigare.
+This revealed a real gap: no existing system combined LLM-guided eBPF program generation
+with KCOV as an RL reward signal. Using buzzer as a data collector (2M entries of
+`bytecode_hex + verifier_log`) and then training an LLM with GRPO and a KCOV-based
+reward was a novel approach worth investigating.
 
-### Setup di training
+### Training setup
 
-- **Modello base:** Qwen2.5-Coder-1.5B.
-- **Tecnica:** **QLoRA** (4-bit NF4), rank-16 su `Q/K/V/O`; ~0.14% parametri
-  addestrati (≈ 2.1 M su 1.5 B).
-- **Iperparametri:** batch effettivo 8 (gradient accumulation), `max_seq_len` 768,
+- **Base model:** Qwen2.5-Coder-1.5B.
+- **Technique:** **QLoRA** (4-bit NF4), rank-16 on `Q/K/V/O`; ~0.14% parameters
+  trained (≈ 2.1 M out of 1.5 B).
+- **Hyperparameters:** effective batch 8 (gradient accumulation), `max_seq_len` 768,
   learning rate 1–2e-4, AdamW 8-bit.
 - **Hardware:** RTX 4070 Laptop, 8.59 GB VRAM, compute 8.9, BF16 ok
-  (verificato in [`gpu_check.ipynb`](fuzzing_ml_env/gpu_check.ipynb)).
-- **Ambiente:** [`pixi.toml`](fuzzing_ml_env/pixi.toml) — Python 3.11, PyTorch 2.5.1 + CUDA 12.1,
+  (verified in [`gpu_check.ipynb`](fuzzing_ml_env/gpu_check.ipynb)).
+- **Environment:** [`pixi.toml`](fuzzing_ml_env/pixi.toml) — Python 3.11, PyTorch 2.5.1 + CUDA 12.1,
   Transformers ≥ 5.4, PEFT 0.18.1, BitsAndBytes, SentencePiece.
 
 ### Notebooks
 
-| Notebook | Data | Contenuto |
-|----------|------|-----------|
-| [`Untitled.ipynb`](fuzzing_ml_env/Untitled.ipynb) | 29 mar | Banco di prova. Prompt universale: `Status: VALID \| Complexity: N insns` per i validi, `Status: INVALID \| Error: … \| Instr: …` per gli invalidi. 2000 step, transfer learning a partire da `modello_ebpf_produzione/checkpoint-1000`. |
-| [`data_analisys.ipynb`](fuzzing_ml_env/data_analisys.ipynb) | 10 apr | Analisi dei 73 dump syzkaller (27 mar → 9 apr): 13 153 validi + 14 361 invalidi. Normalizzazione errori del verifier (mask di numeri e indirizzi). Cap 2 000 esempi per classe di errore → `dataset_final_qwen.jsonl` (27 514 esempi). |
-| [`qwen_fine_tuning.ipynb`](fuzzing_ml_env/qwen_fine_tuning.ipynb) | 16 apr | Versione intermedia del fine-tuning (fp16). |
-| [`SFT_tesi.ipynb`](fuzzing_ml_env/SFT_tesi.ipynb) | 16 apr | Versione "tesi": BF16 + FlashAttention-2, 1500 step, split 90/10, salvataggio best-on-val. |
-| [`gpu_check.ipynb`](fuzzing_ml_env/gpu_check.ipynb) | 16 apr | Diagnostica hardware. |
+| Notebook | Date | Contents |
+|----------|------|----------|
+| [`Untitled.ipynb`](fuzzing_ml_env/Untitled.ipynb) | 29 Mar | Scratch pad. Universal prompt: `Status: VALID \| Complexity: N insns` for valid, `Status: INVALID \| Error: … \| Instr: …` for invalid. 2000 steps, transfer learning from `modello_ebpf_produzione/checkpoint-1000`. |
+| [`data_analisys.ipynb`](fuzzing_ml_env/data_analisys.ipynb) | 10 Apr | Analysis of 73 syzkaller dumps (27 Mar → 9 Apr): 13 153 valid + 14 361 invalid. Verifier error normalisation (mask numbers and addresses). Cap 2 000 examples per error class → `dataset_final_qwen.jsonl` (27 514 examples). |
+| [`qwen_fine_tuning.ipynb`](fuzzing_ml_env/qwen_fine_tuning.ipynb) | 16 Apr | Intermediate fine-tuning version (fp16). |
+| [`SFT_tesi.ipynb`](fuzzing_ml_env/SFT_tesi.ipynb) | 16 Apr | Thesis version: BF16 + FlashAttention-2, 1500 steps, 90/10 split, best-on-val checkpoint. |
+| [`gpu_check.ipynb`](fuzzing_ml_env/gpu_check.ipynb) | 16 Apr | Hardware diagnostics. |
 
-### Directory dei modelli (in ordine cronologico)
+### Model directories (chronological)
 
-| Directory | Ruolo |
-|-----------|-------|
-| [`modello_ebpf_lora/`](fuzzing_ml_env/modello_ebpf_lora/) | Primi tentativi LoRA (checkpoint 100–500) |
-| [`modello_ebpf_finetuned/`](fuzzing_ml_env/modello_ebpf_finetuned/) | Baseline SFT iniziale |
-| [`modello_ebpf_fase2/`](fuzzing_ml_env/modello_ebpf_fase2/) | Run "fase 2" |
-| [`modello_ebpf_produzione/`](fuzzing_ml_env/modello_ebpf_produzione/) | `checkpoint-1000` usato come base per transfer learning |
-| [`modello_ebpf_3000/`](fuzzing_ml_env/modello_ebpf_3000/) | Run completo 2000 step, checkpoint 500–2000 |
-| [`modello_ebpf_definitivo/`](fuzzing_ml_env/modello_ebpf_definitivo/) | Adapter LoRA finale (~8.7 MB) |
-| [`adattatore_ebpf_finale/`](fuzzing_ml_env/adattatore_ebpf_finale/) | Copia / finalizzazione dell'adapter |
+| Directory | Role |
+|-----------|------|
+| [`modello_ebpf_lora/`](fuzzing_ml_env/modello_ebpf_lora/) | First LoRA attempts (checkpoints 100–500) |
+| [`modello_ebpf_finetuned/`](fuzzing_ml_env/modello_ebpf_finetuned/) | Initial SFT baseline |
+| [`modello_ebpf_fase2/`](fuzzing_ml_env/modello_ebpf_fase2/) | "Phase 2" run |
+| [`modello_ebpf_produzione/`](fuzzing_ml_env/modello_ebpf_produzione/) | `checkpoint-1000` used as base for transfer learning |
+| [`modello_ebpf_3000/`](fuzzing_ml_env/modello_ebpf_3000/) | Full 2000-step run, checkpoints 500–2000 |
+| [`modello_ebpf_definitivo/`](fuzzing_ml_env/modello_ebpf_definitivo/) | Final LoRA adapter (~8.7 MB) |
+| [`adattatore_ebpf_finale/`](fuzzing_ml_env/adattatore_ebpf_finale/) | Copy / finalisation of the adapter |
 
-### Output generati
+### Generated outputs
 
-I file [`risultati_checkpoint-*.txt`](fuzzing_ml_env/) contengono il bytecode eBPF
-generato dai vari checkpoint, in formato esadecimale, con terminazione
-`9500000000000000` (istruzione `BPF_EXIT`).
+Files [`risultati_checkpoint-*.txt`](fuzzing_ml_env/) contain eBPF bytecode
+generated by the various checkpoints, in hexadecimal format, terminated by
+`9500000000000000` (`BPF_EXIT` instruction).
 
 ---
 
-## 7. Fase 5 — Valutazione closed-loop (documentata in `note.txt`)
+## 7. Phase 5 — Closed-loop evaluation (documented in `note.txt`)
 
-Pipeline costruita a mano per misurare la qualità delle generazioni:
+Pipeline built by hand to measure generation quality:
 
-1. Genero bytecode con il checkpoint fine-tuned (dai notebook sopra).
-2. Dentro la VM QEMU, monto il corpus via 9p in `/mnt/corpus`.
-3. Passo il file `risultati_checkpoint-*.txt` riga per riga al mio tool
-   **`ebpf_validator`** (scritto da me), che chiama il verifier e stampa
+1. Generate bytecode with the fine-tuned checkpoint (from notebooks above).
+2. Inside the QEMU VM, mount the corpus via 9p at `/mnt/corpus`.
+3. Feed the `risultati_checkpoint-*.txt` file line by line to
+   **`ebpf_validator`** (written by me), which calls the verifier and prints
    `VERDETTO: ACCETTATO` / `VERDETTO: RIFIUTATO`.
-4. Conto gli accettati e calcolo il pass-rate per checkpoint.
-5. Per i primi 25 programmi, dump completo del log del verifier per classificare
-   le cause di rifiuto.
+4. Count accepted programs and compute pass-rate per checkpoint.
+5. For the first 25 programs, full verifier log dump to classify rejection causes.
 
-Il loop completo è in `note.txt` (linee 56–87), inclusa la versione `docker exec`
-che invoca `ebpf_validator` sul container `fuzzer_node_1`.
+The full loop is in `note.txt` (lines 56–87), including the `docker exec`
+version that invokes `ebpf_validator` on container `fuzzer_node_1`.
 
-### Pass-rate misurati (risultati definitivi)
+### Measured pass-rates (final results)
 
-Valutazione formale eseguita su `curated_merged` (modello finale SFT, 3 epoch completi)
-vs `zero-shot` (Qwen2.5-Coder-1.5B base senza fine-tuning). N=100 programmi ciascuno.
+Formal evaluation on `curated_merged` (final SFT model, 3 complete epochs)
+vs `zero-shot` (Qwen2.5-Coder-1.5B base with no fine-tuning). N=100 programs each.
 
-| Modello | N | Compilati | ACCETTATO | Compile rate | Pass-rate |
-|---------|---|-----------|-----------|--------------|-----------|
+| Model | N | Compiled | ACCETTATO | Compile rate | Pass-rate |
+|-------|---|----------|-----------|--------------|-----------|
 | `curated-merged` (SFT) | 100 | 73 | **60** | 73.0% | **60.0%** |
 | `zero-shot` (base) | 100 | 1 | 1 | 1.0% | **1.0%** |
 
-Fonte: `results/passrate_summary.csv`, log in `results/passrate_run_curated.log` e
+Source: `results/passrate_summary.csv`, logs in `results/passrate_run_curated.log` and
 `results/passrate_run_zeroshot.log`.
 
-**Risultato chiave:** il fine-tuning porta il pass-rate da ~0% (base, funzionalmente zero)
-a 60%, dimostrando che il modello ha imparato la sintassi BPF dal training data.
+**Key result:** fine-tuning raises the pass-rate from ~0% (base, functionally zero)
+to 60%, demonstrating that the model learned BPF verifier syntax from the training data.
 
 ---
 
-## 8. Fase 6 — Rotazione corpus (8–21 aprile)
+## 8. Phase 6 — Corpus rotation (8–21 April)
 
-- [`rotate_dataset.sh`](fuzzing_lab/rotate_dataset.sh) — pausa `fuzzer_node_1`,
-  comprime il JSONL con gzip + timestamp, riavvia il container.
-- Il container *può* crashare (è il punto del fuzzing del kernel): per questo c'è
-  il restart automatico. Le righe `[!] fuzzer_node_1 is not running` in
-  [`rotate_log.txt`](fuzzing_lab/rotate_log.txt) sono la rotazione che incontra il
-  nodo tra un crash e il restart — comportamento atteso, non un bug.
-- [`shared_corpus/`](fuzzing_lab/shared_corpus/) — ~13 GB compressi,
-  `dataset_syzkaller_347…405.jsonl.gz` (8–9 aprile), ~600k righe ciascuno, campo
+- [`rotate_dataset.sh`](fuzzing_lab/rotate_dataset.sh) — pauses `fuzzer_node_1`,
+  compresses the JSONL with gzip + timestamp, restarts the container.
+- The container *can* crash (that is the point of kernel fuzzing): hence the
+  automatic restart. Lines `[!] fuzzer_node_1 is not running` in
+  [`rotate_log.txt`](fuzzing_lab/rotate_log.txt) are the rotation script encountering
+  the node between a crash and restart — expected behaviour, not a bug.
+- [`shared_corpus/`](fuzzing_lab/shared_corpus/) — ~13 GB compressed,
+  `dataset_syzkaller_347…405.jsonl.gz` (8–9 April), ~600k rows each, field
   `bytecode_hex`.
 
 ---
 
-## 9. Cosa NON è stato fatto
+## 9. What was NOT done
 
-- **RL run 2 non eseguita.** Il pipeline con reward depth-based verdict-blind è stato
-  implementato e validato localmente, ma non è stato eseguito un training run completo.
-  Documentato come future work.
-- **Nessun confronto quantitativo** tra le run di buzzer e i bytecode generati da
-  Qwen fine-tuned.
-
----
-
-## 10. Prossimi passi (future work)
-
-1. **RL run 2** con reward depth-based verdict-blind (già implementato in `ml/reward.py`)
-   e prompt neutro (senza `Status: VALID`) — isolerebbe la variabile del prompt bias
-   rispetto al KCOV bug.
-2. **SFT con prompt diverso** — addestrare verso programmi che stressano il verifier
-   invece di generare programmi validi; valutare se cambia il comportamento RL.
-3. Confronto sistematico tra buzzer coverage-guided e modello fine-tuned a parità di
-   tempo-macchina, misurato in unique verifier PCs.
+- **RL run 2 not executed.** The pipeline with depth-based verdict-blind reward was
+  implemented and validated locally, but no full training run was executed.
+  Documented as future work.
+- **No quantitative comparison** between buzzer runs and bytecode generated by
+  fine-tuned Qwen.
 
 ---
 
-## Appendice A — Timeline dei file chiave
+## 10. Next steps (future work)
 
-| Data | File / directory | Descrizione |
-|------|------------------|-------------|
-| 1 mar | `bullseye/`, `bullseye.id_rsa` | Immagine Debian bullseye + ssh key |
-| 1 mar | `trixie/`, `trixie.id_rsa` | Immagine Debian trixie + ssh key |
-| 1 mar | `create-image.sh` | Builder immagine (adattato da syzkaller) |
-| 3 mar | `buzzer_bin` | Binario buzzer compilato |
-| 4–5 mar | `crash_logs/` | 30 dump di kernel panic / KASAN |
-| 5 mar | `start_swarm.sh`, `run_node.sh` | Orchestrazione 3 VM + runner nodo |
-| 6 mar | `run_smart.sh`, `run_fake.sh` | Modalità smart / sanity check |
-| 7–10 mar | `diagnose*.sh`, `diagnostic_data/` | Profiling del fuzzer |
-| 10 mar | `linux/` (ultimo build) | Linux 6.8.0 con 3 `bzImage` (standard/blind/smart) |
-| 26 mar | `bullseye.img` | Immagine finale bullseye |
-| 27 mar | `Dockerfile`, `entrypoint.sh` | Containerizzazione |
-| 28 mar | `pixi.toml`, prime run LoRA | Setup ambiente ML + `modello_ebpf_lora/` |
-| 28 mar | `modello_ebpf_fase2/`, `modello_ebpf_produzione/` | Fase 2 + ckpt produzione |
-| 28–29 mar | `risultati_checkpoint-500/1000/2000/3000.txt` | Generazioni dei checkpoint |
-| 29 mar | `Untitled.ipynb`, `trixie.img` | Banco di prova training + immagine trixie finale |
-| 8 apr | `rotate_dataset.sh`, `note.txt` (aggiornato) | Rotazione corpus + pipeline validazione |
-| 8–9 apr | `shared_corpus/dataset_syzkaller_347…405.jsonl.gz` | ~13 GB di corpus ruotato |
-| 10 apr | `data_analisys.ipynb` | Dataset finale 27 514 esempi |
-| 16 apr | `SFT_tesi.ipynb`, `qwen_fine_tuning.ipynb`, `gpu_check.ipynb` | Versione "tesi" del training |
-| 21 apr | `rotate_log.txt` (ultima riga) | Ultima esecuzione registrata della rotazione |
+1. **RL run 2** with depth-based verdict-blind reward (already implemented in `ml/reward.py`)
+   and a neutral prompt (without `Status: VALID`) — would isolate the prompt bias variable
+   from the KCOV bug.
+2. **SFT with a different prompt** — train toward programs that stress the verifier
+   instead of generating valid programs; evaluate whether this changes RL behaviour.
+3. Systematic comparison between coverage-guided buzzer and the fine-tuned model
+   at equal wall-clock time, measured in unique verifier PCs.
 
 ---
 
-## Appendice B — Comandi chiave da `note.txt`
+## Appendix A — Key file timeline
 
-**Avvio QEMU con sharing del sorgente kernel via 9p**
+| Date | File / directory | Description |
+|------|-----------------|-------------|
+| 1 Mar | `bullseye/`, `bullseye.id_rsa` | Debian bullseye image + SSH key |
+| 1 Mar | `trixie/`, `trixie.id_rsa` | Debian trixie image + SSH key |
+| 1 Mar | `create-image.sh` | Image builder (adapted from syzkaller) |
+| 3 Mar | `buzzer_bin` | Compiled buzzer binary |
+| 4–5 Mar | `crash_logs/` | 30 kernel panic / KASAN dumps |
+| 5 Mar | `start_swarm.sh`, `run_node.sh` | 3-VM orchestration + node runner |
+| 6 Mar | `run_smart.sh`, `run_fake.sh` | Smart mode / sanity check |
+| 7–10 Mar | `diagnose*.sh`, `diagnostic_data/` | Fuzzer profiling |
+| 10 Mar | `linux/` (last build) | Linux 6.8.0 with 3 `bzImage` variants (standard/blind/smart) |
+| 26 Mar | `bullseye.img` | Final bullseye image |
+| 27 Mar | `Dockerfile`, `entrypoint.sh` | Containerisation |
+| 28 Mar | `pixi.toml`, first LoRA runs | ML environment setup + `modello_ebpf_lora/` |
+| 28 Mar | `modello_ebpf_fase2/`, `modello_ebpf_produzione/` | Phase 2 + production checkpoint |
+| 28–29 Mar | `risultati_checkpoint-500/1000/2000/3000.txt` | Checkpoint generations |
+| 29 Mar | `Untitled.ipynb`, `trixie.img` | Training scratch pad + final trixie image |
+| 8 Apr | `rotate_dataset.sh`, `note.txt` (updated) | Corpus rotation + validation pipeline |
+| 8–9 Apr | `shared_corpus/dataset_syzkaller_347…405.jsonl.gz` | ~13 GB rotated corpus |
+| 10 Apr | `data_analisys.ipynb` | Final dataset: 27 514 examples |
+| 16 Apr | `SFT_tesi.ipynb`, `qwen_fine_tuning.ipynb`, `gpu_check.ipynb` | Thesis training version |
+| 21 Apr | `rotate_log.txt` (last line) | Last recorded corpus rotation run |
+
+---
+
+## Appendix B — Key commands from `note.txt`
+
+**QEMU launch with kernel source sharing via 9p**
 ```bash
 qemu-system-x86_64 \
     -m 4G -smp 4 \
@@ -257,7 +252,7 @@ qemu-system-x86_64 \
     -daemonize
 ```
 
-**Upload di `vmlinux` e `buzzer` nel guest**
+**Upload `vmlinux` and `buzzer` to the guest**
 ```bash
 scp -i trixie.id_rsa -P 10022 -o "StrictHostKeyChecking no" \
     $HOME/tesi/linux/vmlinux root@localhost:/root/vmlinux
@@ -265,7 +260,7 @@ scp -i trixie.id_rsa -P 10022 -o "StrictHostKeyChecking no" \
     $HOME/tesi/buzzer/bazel-bin/buzzer_/buzzer root@localhost:/root/buzzer
 ```
 
-**QEMU con `bzImage_kasan` e corpus condiviso**
+**QEMU with `bzImage_kasan` and shared corpus**
 ```bash
 qemu-system-x86_64 \
     -m 2G -smp 2 \
@@ -276,39 +271,39 @@ qemu-system-x86_64 \
     -fsdev local,security_model=none,id=fsdev_corpus,path=./shared_corpus \
     -device virtio-9p-pci,id=fs_corpus,fsdev=fsdev_corpus,mount_tag=corpus_share
 
-# dentro il guest:
+# inside the guest:
 mkdir -p /mnt/corpus
 mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 corpus_share /mnt/corpus
 ```
 
-**Loop di validazione dei bytecode generati**
+**Bytecode validation loop**
 ```bash
 cd /mnt/corpus
-contatore=1
-accettati=0
+counter=1
+accepted=0
 while read -r line; do
     res=$(./ebpf_validator "$line" | grep "VERDETTO")
     if [[ $res == *"ACCETTATO"* ]]; then
-        accettati=$((accettati+1))
-        echo "[+] Prog $contatore: OK"
+        accepted=$((accepted+1))
+        echo "[+] Prog $counter: OK"
     else
-        echo "[-] Prog $contatore: FAIL"
+        echo "[-] Prog $counter: FAIL"
     fi
-    contatore=$((contatore+1))
+    counter=$((counter+1))
 done < risultati_checkpoint-1000-1.txt
 
-echo " RISULTATO FINALE: $accettati su $((contatore-1))"
-echo " PASS RATE: $((accettati * 100 / (contatore-1)))%"
+echo " FINAL RESULT: $accepted out of $((counter-1))"
+echo " PASS RATE: $((accepted * 100 / (counter-1)))%"
 ```
 
-**Validazione di un singolo bytecode via `docker exec`**
+**Single bytecode validation via `docker exec`**
 ```bash
 docker exec -it fuzzer_node_1 \
     ssh -p 10022 -i trixie.id_rsa -o "StrictHostKeyChecking no" root@127.0.0.1 \
     "/mnt/corpus/ebpf_validator <hex_bytecode>"
 ```
 
-**Run del container fuzzer**
+**Run the fuzzer container**
 ```bash
 docker run -d \
     --name fuzzer_node_1 \

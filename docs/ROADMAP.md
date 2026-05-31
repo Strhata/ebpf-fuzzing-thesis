@@ -79,7 +79,6 @@ ebpf-fuzzing-thesis/
 │   ├── reward.py                    # KCOV reward function (depth-based verdict-blind; see redesign decision)
 │   ├── rl_grpo.py                   # GRPO RL training script
 │   ├── train.py                     # SFT training script
-│   └── build_baseline_dataset.py
 ├── tools/
 │   ├── analyze_rl_run.py            # Parse grpo_completions.log → tier CSVs + plots
 │   ├── classify_crashes.py

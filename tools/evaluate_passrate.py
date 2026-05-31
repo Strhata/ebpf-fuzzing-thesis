@@ -270,18 +270,18 @@ def main():
                 verdicts[i] = v
 
     # 5. Results
-    accettati = sum(1 for v in verdicts if "ACCETTATO" in v)
-    rifiutati = sum(1 for v in verdicts if "RIFIUTATO" in v)
-    errori    = sum(1 for v in verdicts if "ERRORE" in v or v == "SKIPPED" or not v)
+    accepted    = sum(1 for v in verdicts if "ACCETTATO" in v)
+    rejected    = sum(1 for v in verdicts if "RIFIUTATO" in v)
+    error_count = sum(1 for v in verdicts if "ERRORE" in v or v == "SKIPPED" or not v)
 
     print(f"\n{'='*50}")
     print(f" PASS-RATE RESULTS — {label}")
     print(f"{'='*50}")
     print(f" Generated  : {args.n}")
     print(f" Compiled   : {compile_ok}  ({compile_ok/args.n*100:.1f}%)")
-    print(f" ACCETTATO  : {accettati}  ({accettati/args.n*100:.1f}%)")
-    print(f" RIFIUTATO  : {rifiutati}  ({rifiutati/args.n*100:.1f}%)")
-    print(f" Error/Skip : {errori}")
+    print(f" ACCETTATO  : {accepted}  ({accepted/args.n*100:.1f}%)")
+    print(f" RIFIUTATO  : {rejected}  ({rejected/args.n*100:.1f}%)")
+    print(f" Error/Skip : {error_count}")
     print(f"{'='*50}")
 
     # 6. Save CSV
@@ -301,11 +301,11 @@ def main():
     with summary_file.open("a", newline="") as f:
         w = csv.writer(f)
         if write_header:
-            w.writerow(["label", "n_generated", "n_compiled", "n_accettato", "compile_rate", "pass_rate"])
+            w.writerow(["label", "n_generated", "n_compiled", "n_accepted", "compile_rate", "pass_rate"])
         w.writerow([
-            label, args.n, compile_ok, accettati,
+            label, args.n, compile_ok, accepted,
             f"{compile_ok/args.n*100:.1f}%",
-            f"{accettati/args.n*100:.1f}%",
+            f"{accepted/args.n*100:.1f}%",
         ])
     print(f"[+] Summary  → {summary_file}")
 
