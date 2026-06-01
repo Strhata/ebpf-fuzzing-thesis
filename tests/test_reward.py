@@ -34,6 +34,8 @@ def _fresh_reward(pc_set_path: str = "", max_pcs_seen_path: str = ""):
 _VALID_ASM = "0: (b7) r0 = 0\n1: (95) exit"
 # Assembly that will fail to parse/compile (no valid instructions)
 _BAD_ASM = "this is not assembly"
+# Hex string representing 20 8-byte instructions — passes the instruction floor (≥15)
+_VALID_HEX = "00" * (20 * 8)
 
 
 def _mock_ssh(verdict: str, pcs: list[int] | None = None) -> MagicMock:
@@ -68,7 +70,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         ssh = MagicMock()
         ssh.run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=30)
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"), \
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX), \
              patch.object(rw, "_watchdog") as mock_watchdog:
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rewards, [2.0])
@@ -85,7 +87,7 @@ class TestRewardFormula(unittest.TestCase):
                 pcs = list(range(n_pcs))
                 rw._pc_set = set(pcs)  # pre-seed so no discovery bonus
                 ssh = _mock_ssh("ACCEPTED", pcs=pcs)
-                with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+                with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
                     rewards = rw.compute_rewards([_VALID_ASM], ssh)
                 self.assertAlmostEqual(rewards[0], expected, places=5)
 
@@ -97,7 +99,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 10
         ssh = _mock_ssh("ACCEPTED", pcs=list(range(25)))
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rw._max_pcs_seen, 25)
 
@@ -105,7 +107,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 50
         ssh = _mock_ssh("ACCEPTED", pcs=list(range(10)))
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertEqual(rw._max_pcs_seen, 50)
 
@@ -115,7 +117,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 10
         ssh = _mock_ssh("ACCEPTED", pcs=[0x9999])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
         self.assertAlmostEqual(rewards[0], depth + 1.0)
@@ -125,7 +127,7 @@ class TestRewardFormula(unittest.TestCase):
         rw._max_pcs_seen = 10
         rw._pc_set = {0x9999}
         ssh = _mock_ssh("ACCEPTED", pcs=[0x9999])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
         self.assertAlmostEqual(rewards[0], depth)
@@ -137,7 +139,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 10
         ssh = _mock_ssh("ACCEPTED", pcs=[0x1000])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
         self.assertEqual(len(rewards), 2)
@@ -150,7 +152,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         rw._max_pcs_seen = 10
         ssh = _mock_ssh("REJECTED", pcs=[0x1000, 0x1001])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 2 / 10 * 0.5)
         self.assertAlmostEqual(rewards[0], depth + 1.0)  # new pcs → discovery bonus
@@ -159,7 +161,7 @@ class TestRewardFormula(unittest.TestCase):
     def test_accettato_not_treated_as_errore(self):
         rw = self._rw()
         ssh = _mock_ssh("ACCEPTED", pcs=[0x5555])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         self.assertGreater(rewards[0], 0.0)
 
@@ -169,7 +171,7 @@ class TestRewardFormula(unittest.TestCase):
         rw = self._rw()
         ssh1 = _mock_ssh("ACCEPTED", pcs=[0xA])
         ssh2 = _mock_ssh("ACCEPTED", pcs=[0xB])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rw.compute_rewards([_VALID_ASM], ssh1)
             rw.compute_rewards([_VALID_ASM], ssh2)
         self.assertIn(0xA, rw._pc_set)
@@ -180,7 +182,7 @@ class TestRewardFormula(unittest.TestCase):
         rw._pc_set = {0x42}
         rw._call_count = 99
         ssh = _mock_ssh("ACCEPTED", pcs=[0x43])
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertTrue(Path(self._pc_path).exists(), "PC set file not written at call 100")
         with open(self._pc_path) as f:
@@ -193,7 +195,7 @@ class TestRewardFormula(unittest.TestCase):
         rw._max_pcs_seen = 5
         rw._call_count = 99
         ssh = _mock_ssh("ACCEPTED", pcs=list(range(8)))  # 8 pcs > 5
-        with patch.object(rw, "_encode_to_hex", return_value="deadbeef"):
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
             rw.compute_rewards([_VALID_ASM], ssh)
         self.assertTrue(Path(self._max_pcs_path).exists(),
                         "max_pcs_seen file not written at call 100")
@@ -213,6 +215,59 @@ class TestRewardFormula(unittest.TestCase):
             json.dump(42, f)
         rw = _fresh_reward(self._pc_path, self._max_pcs_path)
         self.assertEqual(rw._max_pcs_seen, 42)
+
+
+    # --- instruction floor ---
+
+    def _hex_of_n_insns(self, n: int) -> str:
+        """Return a hex string representing exactly n 8-byte BPF instructions."""
+        return "00" * (n * 8)
+
+    def test_instruction_floor_fires_below_15(self):
+        rw = self._rw()
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(100)))
+        with patch.object(rw, "_encode_to_hex", return_value=self._hex_of_n_insns(5)):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertEqual(rewards, [0.0])
+        ssh.run.assert_not_called()   # VM must not be contacted when floor fires
+
+    def test_instruction_floor_fires_at_exactly_14(self):
+        rw = self._rw()
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(100)))
+        with patch.object(rw, "_encode_to_hex", return_value=self._hex_of_n_insns(14)):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertEqual(rewards, [0.0])
+        ssh.run.assert_not_called()
+
+    def test_instruction_floor_does_not_fire_at_15(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(50)))
+        with patch.object(rw, "_encode_to_hex", return_value=self._hex_of_n_insns(15)):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        # Floor must NOT fire — VM is called and depth reward returned
+        ssh.run.assert_called_once()
+        self.assertGreater(rewards[0], 0.0)
+
+    def test_instruction_floor_20_insns_no_new_pcs_gives_depth_only(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        pcs = list(range(40))
+        rw._pc_set = set(pcs)   # pre-seed so discovery bonus is 0
+        ssh = _mock_ssh("ACCEPTED", pcs=pcs)
+        with patch.object(rw, "_encode_to_hex", return_value=self._hex_of_n_insns(20)):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        expected_depth = min(0.5, 40 / 100 * 0.5)
+        self.assertAlmostEqual(rewards[0], expected_depth)
+
+    def test_instruction_floor_20_insns_new_pcs_gives_depth_plus_bonus(self):
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(40)))
+        with patch.object(rw, "_encode_to_hex", return_value=self._hex_of_n_insns(20)):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        expected_depth = min(0.5, 40 / 100 * 0.5)
+        self.assertAlmostEqual(rewards[0], expected_depth + 1.0)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,9 @@ Tests for the pure-Python BPF bytecode encoder in reward.py.
 All tests are offline (no VM, no SSH).  Each test verifies one behaviour of
 _encode_to_hex or _encode_insn through the public _encode_to_hex interface.
 
+Input format: bare instruction text (no N: line numbers, no (XX) opcode bytes).
+Opcodes are inferred from instruction syntax.
+
 Instruction byte layout (little-endian):
   byte 0    : opcode
   byte 1    : (src_reg << 4) | dst_reg
@@ -81,17 +84,15 @@ def test_only_verifier_state_returns_none():
     assert _encode_to_hex("0: R1=ctx() R10=fp0") is None
 
 
-def test_no_opcode_annotation_skipped():
-    # Lines without (XX) opcode are skipped; bare "exit" is the exception.
-    # "r0 = 5" has no opcode → skipped; "exit" → appended.
-    h = _encode_to_hex("r0 = 5\nexit")
+def test_unrecognised_line_skipped():
+    # Unrecognised text is skipped; other valid lines in the same input still encode.
+    h = _encode_to_hex("not_an_instruction\nr0 = 1\nexit")
     assert h is not None
-    assert unpack(insns(h)[-1])[0] == 0x95   # only the exit survives
+    assert len(insns(h)) == 2  # r0=1 and exit
 
 
-def test_no_instructions_at_all_returns_none():
-    # No opcode-annotated lines AND no bare "exit" → nothing to encode
-    assert _encode_to_hex("r0 = 5\nr1 = 99") is None
+def test_only_unrecognised_returns_none():
+    assert _encode_to_hex("not an instruction\nalso not valid") is None
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +100,7 @@ def test_no_instructions_at_all_returns_none():
 # ---------------------------------------------------------------------------
 
 def test_exit_appended_when_missing():
-    h = _encode_to_hex("0: (b7) r0 = 0")
+    h = _encode_to_hex("r0 = 0")
     parts = insns(h)
     assert len(parts) == 2
     code, _, _, _, _ = unpack(parts[-1])
@@ -107,17 +108,17 @@ def test_exit_appended_when_missing():
 
 
 def test_exit_not_duplicated_when_present():
-    h = _encode_to_hex("0: (b7) r0 = 0\n1: (95) exit")
+    h = _encode_to_hex("r0 = 0\nexit")
     parts = insns(h)
     assert len(parts) == 2
     assert unpack(parts[-1])[0] == 0x95
 
 
-def test_bare_exit_without_opcode_annotation():
-    # A bare "exit" line (no N:(XX) prefix) should still be appended
-    h = _encode_to_hex("0: (b7) r0 = 1\nexit")
+def test_exit_standalone():
+    h = _encode_to_hex("exit")
     parts = insns(h)
-    assert unpack(parts[-1])[0] == 0x95
+    assert len(parts) == 1
+    assert unpack(parts[0])[0] == 0x95
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +126,7 @@ def test_bare_exit_without_opcode_annotation():
 # ---------------------------------------------------------------------------
 
 def test_minimal_program_byte_identical_to_ground_truth():
-    h = _encode_to_hex("0: (b7) r0 = 0\n1: (95) exit")
+    h = _encode_to_hex("r0 = 0\nexit")
     assert h == "b7000000000000009500000000000000"
 
 
@@ -134,7 +135,7 @@ def test_minimal_program_byte_identical_to_ground_truth():
 # ---------------------------------------------------------------------------
 
 def test_mov64_imm_positive():
-    h = _encode_to_hex("0: (b7) r3 = 42\n1: (95) exit")
+    h = _encode_to_hex("r3 = 42\nexit")
     code, dst, src, off, imm = unpack(insns(h)[0])
     assert code == 0xb7
     assert dst == 3
@@ -144,23 +145,23 @@ def test_mov64_imm_positive():
 
 
 def test_mov64_imm_negative():
-    h = _encode_to_hex("0: (b7) r0 = -772319294\n1: (95) exit")
+    h = _encode_to_hex("r0 = -772319294\nexit")
     _, _, _, _, imm = unpack(insns(h)[0])
     assert imm == -772319294
 
 
 def test_mov64_imm_zero():
-    h = _encode_to_hex("0: (b7) r5 = 0\n1: (95) exit")
+    h = _encode_to_hex("r5 = 0\nexit")
     code, dst, _, _, imm = unpack(insns(h)[0])
     assert code == 0xb7 and dst == 5 and imm == 0
 
 
 # ---------------------------------------------------------------------------
-# MOV64 register  (bf)
+# MOV64 register  (bf)  and  MOV32 register  (bc)
 # ---------------------------------------------------------------------------
 
 def test_mov64_reg():
-    h = _encode_to_hex("0: (bf) r2 = r5\n1: (95) exit")
+    h = _encode_to_hex("r2 = r5\nexit")
     code, dst, src, off, imm = unpack(insns(h)[0])
     assert code == 0xbf
     assert dst == 2
@@ -169,12 +170,28 @@ def test_mov64_reg():
     assert imm == 0
 
 
+def test_mov64_reg_opcode():
+    h = _encode_to_hex("r1 = r2\nexit")
+    code, dst, src, _, _ = unpack(insns(h)[0])
+    assert code == 0xbf
+    assert dst == 1
+    assert src == 2
+
+
+def test_mov32_reg_opcode():
+    h = _encode_to_hex("w1 = w2\nexit")
+    code, dst, src, _, _ = unpack(insns(h)[0])
+    assert code == 0xbc
+    assert dst == 1
+    assert src == 2
+
+
 # ---------------------------------------------------------------------------
 # ALU64 compound assignment — register and immediate
 # ---------------------------------------------------------------------------
 
 def test_add64_reg():
-    h = _encode_to_hex("0: (b7) r0 = 1\n1: (b7) r1 = 2\n2: (0f) r0 += r1\n3: (95) exit")
+    h = _encode_to_hex("r0 = 1\nr1 = 2\nr0 += r1\nexit")
     code, dst, src, _, _ = unpack(insns(h)[2])
     assert code == 0x0f
     assert dst == 0
@@ -182,7 +199,7 @@ def test_add64_reg():
 
 
 def test_add64_imm():
-    h = _encode_to_hex("0: (b7) r0 = 0\n1: (07) r0 += 100\n2: (95) exit")
+    h = _encode_to_hex("r0 = 0\nr0 += 100\nexit")
     code, dst, src, _, imm = unpack(insns(h)[1])
     assert code == 0x07
     assert dst == 0
@@ -191,7 +208,7 @@ def test_add64_imm():
 
 
 def test_lsh64_imm():
-    h = _encode_to_hex("0: (b7) r0 = 1\n1: (67) r0 <<= 32\n2: (95) exit")
+    h = _encode_to_hex("r0 = 1\nr0 <<= 32\nexit")
     code, dst, _, _, imm = unpack(insns(h)[1])
     assert code == 0x67
     assert dst == 0
@@ -199,11 +216,27 @@ def test_lsh64_imm():
 
 
 def test_arsh64_imm():
-    h = _encode_to_hex("0: (b7) r0 = 1\n1: (c7) r0 s>>= 32\n2: (95) exit")
+    h = _encode_to_hex("r0 = 1\nr0 s>>= 32\nexit")
     code, dst, _, _, imm = unpack(insns(h)[1])
     assert code == 0xc7
     assert dst == 0
     assert imm == 32
+
+
+def test_sub64_reg():
+    h = _encode_to_hex("r0 = 5\nr1 = 3\nr0 -= r1\nexit")
+    code, dst, src, _, _ = unpack(insns(h)[2])
+    assert code == 0x1f
+    assert dst == 0
+    assert src == 1
+
+
+def test_mul64_imm():
+    h = _encode_to_hex("r0 = 3\nr0 *= 7\nexit")
+    code, dst, _, _, imm = unpack(insns(h)[1])
+    assert code == 0x27
+    assert dst == 0
+    assert imm == 7
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +244,7 @@ def test_arsh64_imm():
 # ---------------------------------------------------------------------------
 
 def test_mov32_imm():
-    h = _encode_to_hex("0: (b4) w3 = 255\n1: (95) exit")
+    h = _encode_to_hex("w3 = 255\nexit")
     code, dst, src, _, imm = unpack(insns(h)[0])
     assert code == 0xb4
     assert dst == 3
@@ -220,7 +253,7 @@ def test_mov32_imm():
 
 
 def test_xor32_imm():
-    h = _encode_to_hex("0: (b7) r0 = 0\n1: (a4) w0 ^= 128\n2: (95) exit")
+    h = _encode_to_hex("r0 = 0\nw0 ^= 128\nexit")
     code, dst, _, _, imm = unpack(insns(h)[1])
     assert code == 0xa4
     assert dst == 0
@@ -228,20 +261,38 @@ def test_xor32_imm():
 
 
 # ---------------------------------------------------------------------------
+# NEG64 and NEG32
+# ---------------------------------------------------------------------------
+
+def test_neg64():
+    h = _encode_to_hex("r1 = 5\nr1 = -r1\nexit")
+    code, dst, src, _, imm = unpack(insns(h)[1])
+    assert code == 0x87
+    assert dst == 1
+    assert src == 0
+    assert imm == 0
+
+
+def test_neg32():
+    h = _encode_to_hex("w2 = 3\nw2 = -w2\nexit")
+    code, dst, _, _, _ = unpack(insns(h)[1])
+    assert code == 0x84
+    assert dst == 2
+
+
+# ---------------------------------------------------------------------------
 # JMP — unconditional goto
 # ---------------------------------------------------------------------------
 
 def test_goto_positive():
-    h = _encode_to_hex("0: (05) goto +1\n1: (b7) r0 = 99\n2: (95) exit")
+    h = _encode_to_hex("goto +1\nr0 = 99\nexit")
     code, _, _, off, _ = unpack(insns(h)[0])
     assert code == 0x05
     assert off == 1
 
 
 def test_goto_negative():
-    # goto -1 from instruction 1 loops back to itself (instruction 0 next = 1+1-1=1? no,
-    # next = 1+1+(-1) = 1, which would be self — verifier would reject, but encoding must be correct)
-    h = _encode_to_hex("0: (b7) r0 = 0\n1: (05) goto -1\n2: (95) exit")
+    h = _encode_to_hex("r0 = 0\ngoto -1\nexit")
     _, _, _, off, _ = unpack(insns(h)[1])
     assert off == -1
 
@@ -251,8 +302,7 @@ def test_goto_negative():
 # ---------------------------------------------------------------------------
 
 def test_jeq_imm():
-    # if r1 == 5 goto +2
-    h = _encode_to_hex("0: (b7) r1 = 5\n1: (15) if r1 == 5 goto +2\n2: (b7) r0 = 0\n3: (95) exit\n4: (95) exit")
+    h = _encode_to_hex("r1 = 5\nif r1 == 5 goto +2\nr0 = 0\nexit\nexit")
     code, dst, src, off, imm = unpack(insns(h)[1])
     assert code == 0x15
     assert dst == 1
@@ -261,9 +311,17 @@ def test_jeq_imm():
     assert imm == 5
 
 
+def test_jeq_reg():
+    h = _encode_to_hex("r1 = 1\nr2 = 1\nif r1 == r2 goto +1\nexit\nexit")
+    code, dst, src, off, _ = unpack(insns(h)[2])
+    assert code == 0x1d
+    assert dst == 1
+    assert src == 2
+    assert off == 1
+
+
 def test_jgt_reg():
-    # if r3 > r4 goto +1
-    h = _encode_to_hex("0: (b7) r3 = 1\n1: (b7) r4 = 2\n2: (2d) if r3 > r4 goto +1\n3: (95) exit\n4: (95) exit")
+    h = _encode_to_hex("r3 = 1\nr4 = 2\nif r3 > r4 goto +1\nexit\nexit")
     code, dst, src, off, _ = unpack(insns(h)[2])
     assert code == 0x2d
     assert dst == 3
@@ -271,35 +329,98 @@ def test_jgt_reg():
     assert off == 1
 
 
+def test_jne_imm():
+    h = _encode_to_hex("r0 = 0\nif r0 != 1 goto +1\nexit\nexit")
+    code, dst, src, off, imm = unpack(insns(h)[1])
+    assert code == 0x55
+    assert dst == 0
+    assert src == 0
+    assert imm == 1
+
+
+def test_jlt_imm():
+    h = _encode_to_hex("r0 = 3\nif r0 < 5 goto +1\nexit\nexit")
+    code, _, _, _, imm = unpack(insns(h)[1])
+    assert code == 0xa5
+    assert imm == 5
+
+
+def test_jsgt_imm():
+    h = _encode_to_hex("r0 = 10\nif r0 s> 0 goto +1\nexit\nexit")
+    code, _, _, _, imm = unpack(insns(h)[1])
+    assert code == 0x65
+    assert imm == 0
+
+
 # ---------------------------------------------------------------------------
 # Memory load / store
 # ---------------------------------------------------------------------------
 
 def test_ldx_dw():
-    # r1 = *(u64 *)(r10 -8)
-    h = _encode_to_hex("0: (b7) r0 = 1\n1: (7b) *(u64 *)(r10 -8) = r0\n2: (79) r1 = *(u64 *)(r10 -8)\n3: (95) exit")
-    # store: insn 1
+    # store then load u64
+    h = _encode_to_hex("r0 = 1\n*(u64 *)(r10 -8) = r0\nr1 = *(u64 *)(r10 -8)\nexit")
     code_st, dst_st, src_st, off_st, _ = unpack(insns(h)[1])
-    assert code_st == 0x7b
-    assert dst_st == 10   # r10
-    assert src_st == 0    # r0
+    assert code_st == 0x7b   # STX u64
+    assert dst_st == 10
+    assert src_st == 0
     assert off_st == -8
-    # load: insn 2
     code_ld, dst_ld, src_ld, off_ld, _ = unpack(insns(h)[2])
-    assert code_ld == 0x79
-    assert dst_ld == 1    # r1
-    assert src_ld == 10   # r10
+    assert code_ld == 0x79   # LDX u64
+    assert dst_ld == 1
+    assert src_ld == 10
     assert off_ld == -8
 
 
 def test_stx_w():
-    # *(u32 *)(r10 -4) = r0
-    h = _encode_to_hex("0: (b7) r0 = 7\n1: (63) *(u32 *)(r10 -4) = r0\n2: (95) exit")
+    h = _encode_to_hex("r0 = 7\n*(u32 *)(r10 -4) = r0\nexit")
     code, dst, src, off, _ = unpack(insns(h)[1])
-    assert code == 0x63
+    assert code == 0x63   # STX u32
     assert dst == 10
     assert src == 0
     assert off == -4
+
+
+def test_ldx_u32():
+    h = _encode_to_hex("r1 = *(u32 *)(r2 + 4)\nexit")
+    code, dst, src, off, _ = unpack(insns(h)[0])
+    assert code == 0x61   # LDX u32
+    assert dst == 1
+    assert src == 2
+    assert off == 4
+
+
+def test_st_imm():
+    h = _encode_to_hex("*(u32 *)(r1 + 0) = 42\nexit")
+    code, dst, src, off, imm = unpack(insns(h)[0])
+    assert code == 0x62   # ST u32 (immediate)
+    assert dst == 1
+    assert src == 0
+    assert off == 0
+    assert imm == 42
+
+
+# ---------------------------------------------------------------------------
+# lddw — hex-address wide immediates silently skipped
+# ---------------------------------------------------------------------------
+
+def test_lddw_silently_skipped():
+    # r9 = 0xffff88800a11a800 is a map-pointer lddw; must not raise and not appear in output
+    h = _encode_to_hex("r9 = 0xffff88800a11a800\nexit")
+    assert h is not None
+    parts = insns(h)
+    assert len(parts) == 1          # only exit survives
+    assert unpack(parts[0])[0] == 0x95
+
+
+def test_lddw_mixed_rest_encodes():
+    # lddw in the middle; surrounding instructions still encode correctly
+    h = _encode_to_hex("r0 = 1\nr9 = 0xffff88800a11a800\nr1 = 2\nexit")
+    assert h is not None
+    parts = insns(h)
+    assert len(parts) == 3   # r0=1, r1=2, exit (lddw skipped)
+    assert unpack(parts[0])[0] == 0xb7
+    assert unpack(parts[1])[0] == 0xb7
+    assert unpack(parts[2])[0] == 0x95
 
 
 # ---------------------------------------------------------------------------
@@ -308,39 +429,29 @@ def test_stx_w():
 
 def test_verifier_state_lines_skipped():
     asm = """\
-func#0 @0
 0: R1=ctx() R10=fp0
-0: (b7) r0 = 0 ; R0_w=0
-1: (95) exit"""
+r0 = 0
+exit"""
     h = _encode_to_hex(asm)
-    # Only 2 real instructions
     assert len(insns(h)) == 2
 
 
 def test_mark_precise_lines_skipped():
     asm = """\
-0: (b7) r0 = 1 ; R0_w=1
+r0 = 1
 mark_precise: frame0: last_idx 0 first_idx 0
-1: (95) exit"""
+exit"""
     h = _encode_to_hex(asm)
     assert len(insns(h)) == 2
 
 
 def test_state_transition_lines_skipped():
-    # Lines like "from 3 to 5: R0=..." appear in longer verifier logs
     asm = """\
-0: (b7) r0 = 0
+r0 = 0
 from 0 to 2: R0_w=0 R1=ctx() R10=fp0
-1: (95) exit"""
+exit"""
     h = _encode_to_hex(asm)
     assert len(insns(h)) == 2
-
-
-def test_inline_comment_stripped():
-    # "; R0_w=0xdeadbeef" must not affect the encoded imm
-    h1 = _encode_to_hex("0: (b7) r0 = 5\n1: (95) exit")
-    h2 = _encode_to_hex("0: (b7) r0 = 5 ; R0_w=0x5\n1: (95) exit")
-    assert h1 == h2
 
 
 # ---------------------------------------------------------------------------
@@ -349,22 +460,22 @@ def test_inline_comment_stripped():
 
 def test_instruction_count():
     asm = """\
-0: (b7) r0 = 1
-1: (b7) r1 = 2
-2: (0f) r0 += r1
-3: (67) r0 <<= 32
-4: (c7) r0 s>>= 32
-5: (95) exit"""
+r0 = 1
+r1 = 2
+r0 += r1
+r0 <<= 32
+r0 s>>= 32
+exit"""
     h = _encode_to_hex(asm)
     assert len(insns(h)) == 6
 
 
 def test_output_is_multiple_of_8_bytes():
     asm = """\
-0: (b7) r0 = 42
-1: (b7) r1 = 7
-2: (2f) r0 *= r1
-3: (95) exit"""
+r0 = 42
+r1 = 7
+r0 *= r1
+exit"""
     h = _encode_to_hex(asm)
     assert len(h) % 16 == 0
 
@@ -374,7 +485,15 @@ def test_output_is_multiple_of_8_bytes():
 # ---------------------------------------------------------------------------
 
 def test_call_numeric():
-    h = _encode_to_hex("0: (85) call 1\n1: (95) exit")
+    h = _encode_to_hex("call 1\nexit")
+    code, _, _, _, imm = unpack(insns(h)[0])
+    assert code == 0x85
+    assert imm == 1
+
+
+def test_call_helper_name():
+    # Named helper falls back to fn_id=1
+    h = _encode_to_hex("call bpf_map_lookup_elem\nexit")
     code, _, _, _, imm = unpack(insns(h)[0])
     assert code == 0x85
     assert imm == 1
