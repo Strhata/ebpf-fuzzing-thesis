@@ -246,6 +246,7 @@ def main():
         quantization_config=bnb,
         device_map="auto",
         attn_implementation="sdpa",
+        low_cpu_mem_usage=True,  # load weights directly to GPU; avoids 6 GB CPU copy
     )
     lora = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -258,11 +259,18 @@ def main():
     model.print_trainable_parameters()
 
     # --- 3. Datasets ---
+    # Strip heavy string columns (bytecode_hex, verifier_log, etc.) before
+    # creating HuggingFace Datasets — keeping only what build_prompt needs.
+    _prompt_keys = {"verifier_log", "coverage_bin", "novelty_bin"}
+
     def _fmt(s):
         return tokenize(build_prompt(s, tokenizer), tokenizer)
 
-    train_ds = Dataset.from_list(train_samples).map(_fmt)
-    val_ds   = Dataset.from_list(val_samples).map(_fmt)
+    def _minimal(samples):
+        return [{k: s.get(k, "") for k in _prompt_keys} for s in samples]
+
+    train_ds = Dataset.from_list(_minimal(train_samples)).map(_fmt, remove_columns=list(_prompt_keys))
+    val_ds   = Dataset.from_list(_minimal(val_samples)).map(_fmt,   remove_columns=list(_prompt_keys))
     for ds in (train_ds, val_ds):
         ds.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
 
