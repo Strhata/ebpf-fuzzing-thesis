@@ -113,7 +113,9 @@ def make_training_args(output_dir: Path) -> TrainingArguments:
         per_device_train_batch_size=1,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=8,
-        learning_rate=2e-4,
+        learning_rate=5e-5,       # 2e-4 caused plateau at ~1.2; lower rate converges further
+        warmup_ratio=0.03,        # ~216 warmup steps over 7224 total
+        lr_scheduler_type="cosine",
         bf16=True,
         optim="paged_adamw_8bit",
         logging_steps=10,
@@ -253,7 +255,10 @@ def main():
         r=16,
         lora_alpha=32,
         lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        # Include MLP projections: Qwen2.5 stores most learned representations
+        # in gate/up/down_proj; attention-only LoRA plateaus early on code tasks.
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
     )
     model = get_peft_model(base, lora)
     model.print_trainable_parameters()
