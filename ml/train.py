@@ -91,7 +91,7 @@ def build_prompt(sample: dict, tokenizer) -> dict:
 def tokenize(sample: dict, tokenizer) -> dict:
     enc = tokenizer(
         sample["formatted_prompt"],
-        max_length=768,
+        max_length=2048,
         truncation=True,
         padding="max_length",
     )
@@ -114,9 +114,10 @@ def make_training_args(output_dir: Path) -> TrainingArguments:
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=8,
         learning_rate=5e-5,       # 2e-4 caused plateau at ~1.2; lower rate converges further
-        warmup_ratio=0.03,        # ~216 warmup steps over 7224 total
+        warmup_ratio=0.03,
         lr_scheduler_type="cosine",
         bf16=True,
+        gradient_checkpointing=True,  # recompute activations to fit 2048-token sequences in VRAM
         optim="paged_adamw_8bit",
         logging_steps=10,
         save_steps=500,
