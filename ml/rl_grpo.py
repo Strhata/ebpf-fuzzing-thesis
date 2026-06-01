@@ -283,8 +283,11 @@ def main():
     ap.add_argument("--vm-key", default=str(Path.home() / "fuzzing_lab" / "trixie.id_rsa"))
     ap.add_argument("--num-generations", type=int, default=4,
                     help="G: completions per prompt per step (G=4 fits 8GB VRAM at 768 tokens)")
-    ap.add_argument("--max-completion-length", type=int, default=768,
-                    help="Max tokens for generated BPF assembly completions")
+    ap.add_argument("--max-completion-length", type=int, default=2048,
+                    help="Hard token budget for generated completions. "
+                         "In practice generation stops early: the SFT model emits "
+                         "eos_token after 'exit', so mean completion length tracks "
+                         "the actual program size rather than the budget.")
     ap.add_argument("--max-steps", type=int, default=-1,
                     help="Stop after this many steps (-1 = run until end of dataset)")
     ap.add_argument("--beta", type=float, default=0.05,
