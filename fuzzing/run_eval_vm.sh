@@ -35,11 +35,13 @@ done
 
 mkdir -p "$WORKSPACE"
 
-if [[ ! -f "$WORKSPACE/ebpf_validator" ]]; then
-    echo "[!] $WORKSPACE/ebpf_validator not found."
-    echo "[!] Run: make build-validator"
-    exit 1
-fi
+for _bin in ebpf_validator kcov_validator; do
+    if [[ ! -f "$WORKSPACE/$_bin" ]]; then
+        echo "[!] $WORKSPACE/$_bin not found."
+        echo "[!] Run: make build-validator"
+        exit 1
+    fi
+done
 
 # Fresh QCOW2 overlay — leaves trixie.img untouched
 echo "[*] Creating fresh QCOW2 overlay..."
@@ -70,7 +72,7 @@ echo "[*] Mounting corpus share inside VM..."
 ssh -q -p "$SSH_PORT" -i "$SSH_KEY" \
     -o StrictHostKeyChecking=no \
     root@127.0.0.1 \
-    "mkdir -p /mnt/corpus && mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 corpus_share /mnt/corpus && chmod +x /mnt/corpus/ebpf_validator"
+    "mkdir -p /mnt/corpus && mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 corpus_share /mnt/corpus && chmod +x /mnt/corpus/ebpf_validator /mnt/corpus/kcov_validator"
 
 echo "[+] VM ready. SSH: ssh -p $SSH_PORT -i $SSH_KEY root@127.0.0.1"
 echo "[+] Workspace mounted at /mnt/corpus inside VM."

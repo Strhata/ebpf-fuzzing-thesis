@@ -1,33 +1,45 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"unsafe"
 
-	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/asm"
 	"golang.org/x/sys/unix"
 )
 
-// KCOV ioctl numbers for x86_64, kernel 6.8+ (from /usr/include/linux/kcov.h):
-//   KCOV_INIT_TRACE = _IOR('c', 1, unsigned long)
-//                  = (2<<30)|(8<<16)|('c'<<8)|1 = 0x80086301
-//   KCOV_ENABLE    = _IO('c', 100) = 0x6364
-//   KCOV_DISABLE   = _IO('c', 101) = 0x6365
+// KCOV ioctl numbers (x86_64, kernel 6.8+)
 const (
 	kcovInitTrace uintptr = 0x80086301
 	kcovEnable    uintptr = 0x6364
 	kcovDisable   uintptr = 0x6365
 	kcovTracePC   uintptr = 0
-	coverSize              = 64 << 10 // 64k uint64 entries
+	coverSize              = 256 << 10 // 256k entries — large enough for complex programs
+
+	bpfProgLoad       uintptr = 5
+	bpfSocketFilter   uint32  = 1
+	bpfLogLevelStats  uint32  = 1
 )
+
+// bpfProgLoadAttr matches the first fields of union bpf_attr for BPF_PROG_LOAD.
+// Fields beyond ExpectedAttachType are zero-initialised by Go, which is correct.
+type bpfProgLoadAttr struct {
+	ProgType           uint32
+	InsnCnt            uint32
+	Insns              uint64
+	License            uint64
+	LogLevel           uint32
+	LogSize            uint32
+	LogBuf             uint64
+	KernVersion        uint32
+	ProgFlags          uint32
+	ProgName           [16]byte
+	ProgIfindex        uint32
+	ExpectedAttachType uint32
+}
 
 type result struct {
 	Verdict string   `json:"verdict"`
@@ -36,12 +48,11 @@ type result struct {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Uso: ./kcov_validator <bytecode_hex>")
+		fmt.Fprintln(os.Stderr, "usage: ./kcov_validator <bytecode_hex>")
 		os.Exit(1)
 	}
 
-	// KCOV is per-thread; lock goroutine to OS thread so the BPF load
-	// and the KCOV enable/disable happen on the same thread.
+	// KCOV is per-thread; lock goroutine to OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -55,78 +66,81 @@ func main() {
 
 func validate(hexStr string) result {
 	bytecode, err := hex.DecodeString(hexStr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "decodifica hex: %v\n", err)
+	if err != nil || len(bytecode) == 0 || len(bytecode)%8 != 0 {
+		fmt.Fprintln(os.Stderr, "invalid bytecode")
 		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
-	var insns asm.Instructions
-	reader := bytes.NewReader(bytecode)
-	for reader.Len() > 0 {
-		var ins asm.Instruction
-		if err := ins.Unmarshal(reader, binary.LittleEndian, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "parsing istruzione %d: %v\n", len(insns), err)
-			return result{Verdict: "ERROR", PCs: []uint64{}}
-		}
-		insns = append(insns, ins)
-	}
-
-	// Open KCOV device (requires O_RDWR to enable coverage)
+	// --- KCOV setup ---
 	kcovFd, err := os.OpenFile("/sys/kernel/debug/kcov", os.O_RDWR, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "apertura kcov: %v\n", err)
+		fmt.Fprintf(os.Stderr, "open kcov: %v\n", err)
 		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 	defer kcovFd.Close()
 
-	fd := kcovFd.Fd()
+	kfd := kcovFd.Fd()
 
-	// KCOV_INIT_TRACE: tell kernel to allocate coverSize-entry buffer
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, kcovInitTrace, coverSize); errno != 0 {
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, kfd, kcovInitTrace, coverSize); errno != 0 {
 		fmt.Fprintf(os.Stderr, "KCOV_INIT_TRACE: %v\n", errno)
 		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
-	// mmap the shared buffer: coverSize uint64 entries = coverSize*8 bytes
-	area, err := unix.Mmap(int(fd), 0, coverSize*8, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	area, err := unix.Mmap(int(kfd), 0, coverSize*8, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mmap kcov: %v\n", err)
 		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 	defer unix.Munmap(area)
 
-	// View the mmap area as a []uint64: cover[0]=count, cover[1..n]=PCs
 	cover := unsafe.Slice((*uint64)(unsafe.Pointer(&area[0])), coverSize)
 	cover[0] = 0
 
-	// KCOV_ENABLE with KCOV_TRACE_PC (flat PC array, no comparison tracing)
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, kcovEnable, kcovTracePC); errno != 0 {
+	// --- BPF_PROG_LOAD attr ---
+	license := []byte("GPL\x00")
+	logBuf := make([]byte, 1<<20) // 1 MiB verifier log
+
+	attr := bpfProgLoadAttr{
+		ProgType: bpfSocketFilter,
+		InsnCnt:  uint32(len(bytecode) / 8),
+		Insns:    uint64(uintptr(unsafe.Pointer(&bytecode[0]))),
+		License:  uint64(uintptr(unsafe.Pointer(&license[0]))),
+		LogLevel: bpfLogLevelStats,
+		LogSize:  uint32(len(logBuf)),
+		LogBuf:   uint64(uintptr(unsafe.Pointer(&logBuf[0]))),
+	}
+
+	// --- KCOV_ENABLE: trace only the BPF_PROG_LOAD syscall ---
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, kfd, kcovEnable, kcovTracePC); errno != 0 {
 		fmt.Fprintf(os.Stderr, "KCOV_ENABLE: %v\n", errno)
 		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
 
-	// Load BPF program — this is the syscall KCOV traces
-	spec := &ebpf.ProgramSpec{
-		Type:         ebpf.SocketFilter,
-		License:      "GPL",
-		Instructions: insns,
+	progFd, _, sysErrno := unix.Syscall(
+		unix.SYS_BPF,
+		bpfProgLoad,
+		uintptr(unsafe.Pointer(&attr)),
+		unsafe.Sizeof(attr),
+	)
+
+	unix.Syscall(unix.SYS_IOCTL, kfd, kcovDisable, 0) // always disable before reading
+
+	pcs := readPCs(cover)
+
+	if sysErrno == 0 {
+		unix.Close(int(progFd))
+		return result{Verdict: "ACCEPTED", PCs: pcs}
 	}
-	prog, loadErr := ebpf.NewProgramWithOptions(spec, ebpf.ProgramOptions{
-		LogLevel: ebpf.LogLevel(2),
-	})
 
-	// KCOV_DISABLE — always call before reading cover[0]
-	unix.Syscall(unix.SYS_IOCTL, fd, kcovDisable, 0)
-
-	if loadErr != nil {
-		var ve *ebpf.VerifierError
-		if errors.As(loadErr, &ve) {
-			return result{Verdict: "REJECTED", PCs: readPCs(cover)}
+	// Verifier ran if it wrote anything to the log buffer.
+	for _, b := range logBuf {
+		if b != 0 {
+			return result{Verdict: "REJECTED", PCs: pcs}
 		}
-		return result{Verdict: "ERROR", PCs: []uint64{}}
 	}
-	prog.Close()
-	return result{Verdict: "ACCEPTED", PCs: readPCs(cover)}
+
+	// BPF syscall failed before the verifier (e.g. bad insn count, missing map FD)
+	return result{Verdict: "ERROR", PCs: []uint64{}}
 }
 
 func readPCs(cover []uint64) []uint64 {

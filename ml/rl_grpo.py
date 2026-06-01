@@ -2,8 +2,10 @@
 """
 rl_grpo.py — GRPO RL training for eBPF program generation.
 
-Starts from checkpoints/curated_merged/ (merged SFT model) and fine-tunes
-with GRPO using KCOV-based rewards from the eval VM.
+Starts from checkpoints/sft_retrain/sft_adapter (merged SFT model from train.py)
+and fine-tunes with GRPO using KCOV-based rewards from the eval VM.
+
+Do NOT use rl_grpo_v2, rl_grpo_v3, or rl_grpo_cmp* checkpoints as starting points.
 
 Usage:
     pixi run python ml/rl_grpo.py                              # full training (local reward)
@@ -217,7 +219,7 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
     return reward_fn
 
 
-_PROMPT = "Kernel: unknown | Status: VALID\n### ASSEMBLY:\n"
+_PROMPT = "[coverage=high][novelty=high]\n### ASSEMBLY:\n"
 
 
 def _build_dataset(n: int) -> Dataset:
@@ -265,8 +267,8 @@ def main():
     )
     ap.add_argument("--smoke-test", action="store_true",
                     help="10 steps, G=2, mock reward — no VM required")
-    ap.add_argument("--model", default=str(_REPO_ROOT / "checkpoints" / "curated_merged"),
-                    help="Path to base model (merged bf16 SFT checkpoint)")
+    ap.add_argument("--model", default=str(_REPO_ROOT / "checkpoints" / "sft_retrain" / "sft_adapter"),
+                    help="Path to base model (merged SFT adapter from train.py)")
     ap.add_argument("--output-dir", default=str(_REPO_ROOT / "checkpoints" / "rl_grpo"))
     ap.add_argument("--resume", action="store_true",
                     help="Auto-resume from latest checkpoint in output-dir and continue WandB run")
@@ -279,14 +281,14 @@ def main():
     ap.add_argument("--vm-host", default="localhost")
     ap.add_argument("--vm-port", type=int, default=10022)
     ap.add_argument("--vm-key", default=str(Path.home() / "fuzzing_lab" / "trixie.id_rsa"))
-    ap.add_argument("--num-generations", type=int, default=8,
-                    help="G: completions per prompt per step (reduce if VRAM tight)")
-    ap.add_argument("--max-completion-length", type=int, default=400,
+    ap.add_argument("--num-generations", type=int, default=4,
+                    help="G: completions per prompt per step (G=4 fits 8GB VRAM at 768 tokens)")
+    ap.add_argument("--max-completion-length", type=int, default=768,
                     help="Max tokens for generated BPF assembly completions")
     ap.add_argument("--max-steps", type=int, default=-1,
                     help="Stop after this many steps (-1 = run until end of dataset)")
-    ap.add_argument("--beta", type=float, default=0.01,
-                    help="KL penalty coefficient (0.0 = no regularization, risks policy collapse)")
+    ap.add_argument("--beta", type=float, default=0.05,
+                    help="KL penalty coefficient — 0.05 anchors policy to SFT distribution")
     ap.add_argument("--sanity-interval", type=int, default=3600,
                     help="Seconds between sanity checks (default 1h; 0 = disabled)")
     args = ap.parse_args()
