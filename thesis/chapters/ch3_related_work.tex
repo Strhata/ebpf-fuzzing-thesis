@@ -48,16 +48,14 @@ Second, the generation mechanism differs: BRF's constraint solver encodes BPF
 rules as logical constraints, while this work uses an LLM trained on real
 program--verifier-log pairs to learn those rules implicitly from data.
 
-\textbf{BpfChecker}~\cite{bpfchecker} (CCS 2024) applies static analysis to
-identify incorrect or unsound reasoning in the BPF verifier.
-Its approach is complementary to fuzzing: where fuzzing exercises the verifier
-empirically by submitting programs and observing outcomes, BpfChecker reasons
-about the verifier's analysis logic directly, checking for cases where the
-verifier's abstract interpretation is unsound with respect to a reference
-semantics.
-This thesis takes the opposite black-box approach --- generation and execution
-without formal modelling of the verifier's internals --- using coverage depth as
-a proxy for exploration rather than requiring a soundness specification.
+\textbf{BpfChecker}~\cite{bpfchecker} (CCS 2024) uses differential fuzzing
+across multiple eBPF runtime implementations to reveal implementation flaws.
+Rather than targeting a single verifier, it cross-checks the behaviour of
+different eBPF runtimes against each other to identify inconsistencies and bugs.
+This differs from this thesis in two respects: BpfChecker targets
+cross-runtime divergence rather than the internal analysis paths of a single
+verifier, and it operates at the runtime-correctness level rather than using
+coverage depth as an exploration signal.
 
 \textbf{State Embedding}~\cite{state-embedding} (OSDI 2024) proposes learning
 representations of abstract verifier states to improve the efficiency or accuracy

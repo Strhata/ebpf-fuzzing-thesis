@@ -19,7 +19,7 @@ processing; bpftrace and the Linux perf subsystem use it for low-overhead
 kernel observability.
 
 Central to this framework is the \emph{verifier}: a static analysis engine of
-approximately 100,000 lines of C code that checks every eBPF program before it is
+approximately 21,000 lines of C code that checks every eBPF program before it is
 allowed to execute.
 The verifier traverses all possible execution paths through the program's control
 flow graph, tracking the type of every register at every program point and
@@ -30,15 +30,16 @@ The verifier is therefore the primary --- and in many deployment configurations 
 only --- barrier between user-supplied code and the full power of the kernel.
 
 Logical flaws in the verifier have real consequences.
-CVE-2023-2163 allowed incorrect pointer arithmetic to bypass the verifier's
-register-type tracking, enabling an unprivileged user to read and write arbitrary
-kernel memory.
+CVE-2023-2163 exploited a flaw in the verifier's state-pruning logic, which
+incorrectly marked unsafe code paths as equivalent to already-verified safe ones,
+enabling an unprivileged user to read and write arbitrary kernel memory.
 CVE-2024-41003 exploited a flaw in the handling of certain instruction sequences
 to achieve a similar effect.
 A recent systematic study of eBPF security reported over 100 verifier-related
 security issues in 2024 alone~\cite{sok-ebpf}.
 Because eBPF programs are loaded via ordinary system calls that are accessible to
-unprivileged users on many default Linux configurations, each such vulnerability
+unprivileged users on stock Linux kernels and in many containerised and CI
+environments where the restriction is relaxed, each such vulnerability
 represents a potential path from a nominally sandboxed process --- a container,
 a package script, a CI agent --- to full kernel code execution.
 Systematically testing the verifier for such flaws is therefore a high-priority

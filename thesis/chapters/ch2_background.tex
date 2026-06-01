@@ -21,7 +21,7 @@ ten general-purpose registers (r0--r9), a read-only frame pointer (r10), and a
 Programs are loaded into the kernel via the \texttt{BPF\_PROG\_LOAD} system call,
 which triggers the \emph{verifier} before any code is executed.
 
-The verifier is a static analysis engine of approximately 100,000 lines of C code
+The verifier is a static analysis engine of approximately 21,000 lines of C code
 in \texttt{kernel/bpf/verifier.c}.
 It performs abstract interpretation over the program's control-flow graph (CFG):
 every possible execution path is traversed, the type and bounds of every register
@@ -90,7 +90,7 @@ observability.
 Cilium uses eBPF to implement Kubernetes network policies and service routing,
 replacing iptables with a programmable dataplane that processes packets at the
 socket and network-device layers.
-Falco and Tetragon (Isovalent) use eBPF probes to trace system calls at runtime,
+Falco (Sysdig/CNCF) and Tetragon (Isovalent) use eBPF probes to trace system calls at runtime,
 enabling policy enforcement and audit logging without modifying application binaries.
 XDP (eXpress Data Path) attaches eBPF programs at the network-driver level,
 providing packet-processing rates that approach line speed; Cloudflare uses XDP
@@ -101,8 +101,9 @@ scenarios.
 
 The breadth of this deployment amplifies the security stakes.
 A verifier vulnerability is not a local bug: any user who can issue
-\texttt{BPF\_PROG\_LOAD} --- which is permitted to unprivileged users under many
-default Linux configurations --- can exploit it to escalate to kernel privilege.
+\texttt{BPF\_PROG\_LOAD} --- which is permitted to unprivileged users on stock
+Linux kernels and in many containerised and CI environments where the restriction
+is relaxed --- can exploit it to escalate to kernel privilege.
 Systematically finding such vulnerabilities through automated testing is therefore
 a high-priority research goal.
 
