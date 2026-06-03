@@ -1,5 +1,4 @@
 % references.bib
-% Entries marked "TODO: fill" need author / title / pages / DOI before submission.
 % All citations use IEEE numbered style (style=numeric, sorting=none in biblatex).
 
 % --------------------------------------------------------------------------
@@ -7,12 +6,11 @@
 % --------------------------------------------------------------------------
 
 @inproceedings{sok-ebpf,
-  author    = {TODO: fill},
-  title     = {{SoK}: {eBPF} Security},
+  author    = {Kaiming Huang and Mathias Payer and Zhiyun Qian and
+               Jack Sampson and Gang Tan and Trent Jaeger},
+  title     = {{SoK}: Challenges and Paths Toward Memory Safety for {eBPF}},
   booktitle = {Proceedings of the IEEE Symposium on Security and Privacy (S\&P)},
   year      = {2025},
-  note      = {TODO: fill author, pages, DOI.
-               Cited for ``100+ verifier bugs in 2024'', CVE-2023-2163, CVE-2024-41003},
 }
 
 % --------------------------------------------------------------------------
@@ -27,39 +25,41 @@
 }
 
 @inproceedings{brf,
-  author    = {TODO: fill},
-  title     = {{BRF}: {eBPF} Runtime Fuzzer},
+  author    = {Hsin-Wei Hung and Ardalan Amiri Sani},
+  title     = {{BRF}: Fuzzing the {eBPF} Runtime},
   booktitle = {Proceedings of the ACM International Conference on the
                Foundations of Software Engineering (FSE)},
   year      = {2024},
-  note      = {TODO: fill author, pages, DOI. Use FSE 2024 venue, not 2023 arXiv preprint},
+  doi       = {10.1145/3643778},
 }
 
 @inproceedings{bpfchecker,
-  author    = {TODO: fill},
-  title     = {TODO: {BpfChecker} paper title},
+  author    = {Chaoyuan Peng and Muhui Jiang and Lei Wu and Yajin Zhou},
+  title     = {Toss a Fault to {BpfChecker}: Revealing Implementation Flaws
+               for {eBPF} Runtimes with Differential Fuzzing},
   booktitle = {Proceedings of the ACM Conference on Computer and
                Communications Security (CCS)},
   year      = {2024},
-  note      = {TODO: fill author, title, pages, DOI},
+  doi       = {10.1145/3658644.3690237},
 }
 
 @inproceedings{state-embedding,
-  author    = {TODO: fill},
-  title     = {TODO: State Embedding paper title},
+  author    = {Hao Sun and Zhendong Su},
+  title     = {Validating the {eBPF} Verifier via State Embedding},
   booktitle = {Proceedings of the USENIX Symposium on Operating Systems
                Design and Implementation (OSDI)},
   year      = {2024},
-  note      = {TODO: fill author, title, pages, DOI},
 }
 
 @inproceedings{veritas,
-  author    = {TODO: fill},
-  title     = {TODO: {Veritas} paper title},
+  author    = {Tao Lyu and Kumar Kartikeya Dwivedi and Thomas Bourgeat and
+               Mathias Payer and Meng Xu and Sanidhya Kashyap},
+  title     = {{eBPF} Misbehavior Detection: Fuzzing with a
+               Specification-Based Oracle},
   booktitle = {Proceedings of the ACM Symposium on Operating Systems
                Principles (SOSP)},
   year      = {2025},
-  note      = {TODO: pre-publication --- verify proceedings availability before submission},
+  doi       = {10.1145/3731569.3764797},
 }
 
 % --------------------------------------------------------------------------
@@ -67,31 +67,33 @@
 % --------------------------------------------------------------------------
 
 @inproceedings{covrl,
-  author    = {TODO: fill},
-  title     = {{CovRL}: Fuzzing {JavaScript} Engines with Coverage-Guided
-               Reinforcement Learning for {LLM}-based Mutation Operators},
+  author    = {Jueon Eom and Seyeon Jeong and Taekyoung Kwon},
+  title     = {Fuzzing {JavaScript} Interpreters with Coverage-Guided
+               Reinforcement Learning for {LLM}-Based Mutation},
   booktitle = {Proceedings of the ACM SIGSOFT International Symposium on
                Software Testing and Analysis (ISSTA)},
   year      = {2024},
-  note      = {TODO: fill author, pages, DOI. Closest overall prior work},
+  doi       = {10.1145/3650212.3680389},
 }
 
 @inproceedings{fuzz4all,
-  author    = {TODO: fill},
+  author    = {Chunqiu Steven Xia and Matteo Paltenghi and Jia Le Tian and
+               Michael Pradel and Lingming Zhang},
   title     = {{Fuzz4All}: Universal Fuzzing with Large Language Models},
   booktitle = {Proceedings of the IEEE/ACM International Conference on
                Software Engineering (ICSE)},
   year      = {2024},
-  note      = {TODO: fill author, pages, DOI},
+  doi       = {10.1145/3597503.3639121},
 }
 
 @inproceedings{kernelgpt,
-  author    = {TODO: fill},
+  author    = {Chenyuan Yang and Zijie Zhao and Lingming Zhang},
   title     = {{KernelGPT}: Enhanced Kernel Fuzzing via Large Language Models},
   booktitle = {Proceedings of the International Conference on Architectural
                Support for Programming Languages and Operating Systems (ASPLOS)},
   year      = {2025},
-  note      = {TODO: fill author, pages, DOI},
+  pages     = {560--573},
+  doi       = {10.1145/3676641.3716022},
 }
 
 % --------------------------------------------------------------------------
@@ -99,12 +101,12 @@
 % --------------------------------------------------------------------------
 
 @inproceedings{coderl,
-  author    = {TODO: fill},
+  author    = {Hung Le and Yue Wang and Akhilesh Deepak Gotmare and
+               Silvio Savarese and Steven C.~H. Hoi},
   title     = {{CodeRL}: Mastering Code Generation through Pretrained Models
                and Deep Reinforcement Learning},
   booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2022},
-  note      = {TODO: fill author, pages},
 }
 
 % --------------------------------------------------------------------------
@@ -123,22 +125,24 @@
 }
 
 @article{grpo-starvation,
-  author  = {TODO: fill},
-  title   = {TODO: arXiv:2605.07689 title},
+  author  = {Wenhua Nie and Jianan Wu and Junlin Liu and Ziwei Li and
+             Zheng Lin Zhang and Zijian Yilong Fan and Haoran Zheng and
+             Jyh-Shing Roger Jang},
+  title   = {Gradient Starvation in Binary-Reward {GRPO}: Why Group-Mean
+             Centering Fails and Why the Simplest Fix Works},
   journal = {arXiv},
   volume  = {2605.07689},
   year    = {2026},
-  note    = {TODO: fill author and title.
-             Cited for gradient starvation under reward\_std=0 in GRPO},
 }
 
 @article{ngrpo,
-  author  = {TODO: fill},
-  title   = {TODO: arXiv:2509.18851 title},
+  author  = {Gongrui Nan and Siye Chen and Jing Huang and Mengyu Lu and
+             Dexun Wang and Chunmei Xie and Weiqi Xiong and Xianzhou Zeng and
+             Qixuan Zhou and Yadong Li and Xingzhong Xu},
+  title   = {{NGRPO}: Negative-enhanced Group Relative Policy Optimization},
   journal = {arXiv},
   volume  = {2509.18851},
   year    = {2025},
-  note    = {TODO: fill author and title},
 }
 
 % --------------------------------------------------------------------------
