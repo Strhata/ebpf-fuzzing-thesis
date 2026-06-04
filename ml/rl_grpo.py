@@ -24,6 +24,8 @@ from pathlib import Path
 
 _REPO_ROOT_GRPO = Path(__file__).parent.parent
 _GRPO_DEBUG_LOG = _REPO_ROOT_GRPO / "results" / "grpo_completions.log"
+# results/ is gitignored → absent on a fresh clone (e.g. Colab). Create it before logging.
+_GRPO_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_GRPO_DEBUG_LOG),
     level=logging.DEBUG,
