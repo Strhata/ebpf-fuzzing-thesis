@@ -329,9 +329,11 @@ def main():
         os.environ["WANDB_RESUME"] = "must"
         print(f"[*] Resuming WandB run {run_id}")
 
-    # Checkpoint auto-detection.
+    # Checkpoint auto-detection. get_last_checkpoint() raises if the dir does not
+    # exist (first run on a fresh Drive) — create it so --resume means "fresh start".
     resume_checkpoint = None
     if args.resume:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         resume_checkpoint = get_last_checkpoint(args.output_dir)
         if resume_checkpoint:
             print(f"[*] Resuming from checkpoint {resume_checkpoint}")
