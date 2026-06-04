@@ -1,5 +1,9 @@
 # Thesis Recap — eBPF Verifier Fuzzing
 
+> ⚠️ **SUPERSEDED by [`PROJECT_HISTORY.md`](PROJECT_HISTORY.md)** as the project's source of truth.
+> Kept as a personal narrative of the early learning curve; numbers and framing here predate the
+> reconstruction and the valid-and-diverse metric.
+
 > Document reconstructed from files in `/home/stefano-u/fuzzing_lab/` and `/home/stefano-u/fuzzing_ml_env/`
 > and from annotations in `note.txt`. Used as a personal recap and as a reference for writing the thesis.
 
