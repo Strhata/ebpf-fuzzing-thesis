@@ -1,5 +1,8 @@
 # Training Log
 
+> ⚠️ **SUPERSEDED by [`PROJECT_HISTORY.md`](PROJECT_HISTORY.md).** Covers SFT phases 1–2 only
+> (sft_retrain / SFT-v2 not recorded here). Kept for the per-phase hyperparameter detail.
+
 Dataset: `data/dataset_final_qwen.jsonl` — 24,762 train / 2,752 val (90/10 split, seed 42)  
 Base model: Qwen/Qwen2.5-Coder-1.5B  
 Config: QLoRA 4-bit NF4, rank-16, Q/K/V/O, lr=2e-4, batch=8 (grad_accum=8), bf16

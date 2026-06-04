@@ -5,22 +5,35 @@ Università del Salento, 2025–2026.
 
 ## What this is
 
-End-to-end pipeline for training a language model to generate eBPF programs that maximise
-coverage of the Linux BPF verifier, measured via kernel KCOV instrumentation.
+**The quest:** verifier bugs are found by *valid* programs that exercise *many distinct* verifier
+paths. A rejected program means the verifier did its job — it is not a finding. So the goal is a
+generator that is simultaneously **valid** and **path-diverse**, and the true metric is
+**unique KCOV PCs reached by valid programs** — not pass-rate alone, and not coverage from
+rejected programs.
 
 ```
-Data collection → SFT → RL (GRPO) → Coverage evaluation
+Data collection → SFT → RL (GRPO) → Coverage evaluation (unique PCs from valid programs)
 ```
 
-### Current state (2026-05-21)
+> **Single source of truth:** [`docs/PROJECT_HISTORY.md`](docs/PROJECT_HISTORY.md).
+> Canonical model names (SFT-v1/v2, RL-v1/v2) ↔ repo dirs: [`docs/NAMING.md`](docs/NAMING.md).
+> This README is a summary; where they differ, PROJECT_HISTORY wins.
 
-| Phase | Status | Key result |
+### Current state (2026-06-04)
+
+| Phase | Status | What we learned |
 |---|---|---|
-| Data collection | ✅ Done | ~2M programs via modified buzzer, 27k curated |
-| SFT (Qwen2.5-Coder-1.5B) | ✅ Done | **60% verifier pass-rate** (vs 1% zero-shot) |
-| GRPO RL run 1 (beta=0.01) | ✅ Done | **1638 total verifier PCs explored** (137 progressively-new per rl_analysis_pcs.csv); plateau at step ~1300, run stopped at 8370 steps — root cause: KCOV bug (see below) |
-| Reward redesign + Colab pipeline | ✅ Done | Depth-based verdict-blind reward; FastAPI server; Colab notebook with auto-resume |
-| GRPO RL run 2 (depth reward) | 🔬 Future work | Pipeline built, not executed — experimental phase closed |
+| Data collection | ✅ | ~2M programs via modified buzzer → 27k curated |
+| SFT-v1 (`curated_3ep`) | ✅ | Generates valid programs, but verifier-log format is ~232 tok/insn → only ~2 instructions fit the budget → too trivial to explore |
+| RL-v1 (`rl_grpo_v2`) | ✅ negative result | 8,370 steps; reward had zero within-group variance → GRPO gradient starvation (`reward_std=0`, no learning). **Taught us: fix format + reward.** Not a failure — information. |
+| Reward + format redesign | ✅ | Stripped format; depth-based verdict-blind reward; remote (Colab) reward server |
+| SFT-v2 (`sft_retrain`) | ✅ | Generates real, **deep** programs (high PCs/program). Weakness: **low diversity** — clusters, coverage saturates |
+| RL-v2 (`rl_grpo_v3`) | 🔬 the bet | Verdict-blind depth+novelty reward to break clustering. **Not yet run — open question, may not succeed.** |
+
+**On the old "60% pass-rate":** it was SFT-v1 measured through a clang gate whose parser bug
+deflated it; reconstructed honestly (pure encoder + KCOV) SFT-v1 is **73% valid**. But validity
+isn't the story — 73 valid programs reach only ~2,700 unique PCs. **Diversity, not validity, is
+the wall.** Full forensics: [`data/reconstruction/REPORT.md`](data/reconstruction/REPORT.md).
 
 ---
 
@@ -40,12 +53,12 @@ QLoRA fine-tuned `Qwen2.5-Coder-1.5B` on verifier-log assembly format for 3 epoc
 The model learns to generate syntactically and semantically valid BPF programs given
 a target status header.
 
-| Checkpoint | Steps | Eval loss | Pass-rate |
+| Checkpoint | Steps | Eval loss | Accept-rate (honest) |
 |---|---|---|---|
-| `checkpoints/curated_3ep/` | 9,288 (3 ep) | 0.5571 | — |
-| `checkpoints/curated_merged/` | merged bf16 | — | **60%** |
+| `checkpoints/curated_3ep/` (SFT-v1) | 9,288 (3 ep) | 0.5571 | — |
+| `checkpoints/curated_merged/` (merged bf16) | — | — | **73%** valid via encoder+KCOV (the "60%" was clang-gate deflated — see `data/reconstruction/REPORT.md`) |
 
-See `docs/training_log.md` for full phase history.
+See `docs/PROJECT_HISTORY.md` for the full, verified phase history.
 
 ### 3 — RL fine-tuning (GRPO)
 
@@ -68,7 +81,7 @@ the assembler.
 | Crash / timeout | SSH timeout | 2.0 |
 | Unparseable | ENCODE_FAIL | 0.0 |
 
-Run 1 plateaued at 137 new PCs / 1638 total unique PCs (step ~1300, `reward_std=0`). Root cause discovered
+RL-v1 plateaued at 137 new PCs / 1638 total unique PCs (step ~1300, `reward_std=0`). Root cause discovered
 post-run: `kcov_validator` was discarding the KCOV trace for REJECTED programs (returning
 `PCs: []`), making all rejected programs look identical. With GRPO this causes
 `reward_std=0` within each group → zero gradient → no learning.
@@ -97,8 +110,8 @@ so all G completions compete against the same frontier regardless of evaluation 
 
 | Run | Config | Steps | Result |
 |---|---|---|---|
-| `rl_grpo_v2` | beta=0.01, G=4, T=600, local GPU | 8370 | 138 PCs; plateaued at ~1300 due to KCOV bug |
-| Run 2 (planned) | beta=0.01, G=8, T=1200, Colab Pro | — | Future work; pipeline ready |
+| **RL-v1** (`rl_grpo_v2`) | beta=0.01, G=4, T=600, local GPU | 8370 | 137 progressively-new / 1,638 total unique PCs; plateau at ~1300, `reward_std=0` (gradient starvation + KCOV bug). **Negative result → drove the reward/format redesign.** |
+| **RL-v2** (`rl_grpo_v3`) | depth+novelty verdict-blind reward | — | **Not yet run** — the bet that RL breaks SFT-v2's clustering. Pipeline ready. |
 
 ### 4 — Evaluation
 
@@ -129,7 +142,7 @@ data/
 docs/
   training_log.md       # Full phase history and checkpoints
   colab_restart_guide.md  # Colab Pro restart procedure
-  cloudflare_tunnel_setup.md  # Local reward server tunnel setup
+  ngrok_tunnel_setup.md   # Local reward server tunnel (ngrok static domain)
 tests/
   test_reward.py            # Depth-based reward + PC set persistence tests
   test_reward_encoder.py    # 36 unit tests for the BPF encoder

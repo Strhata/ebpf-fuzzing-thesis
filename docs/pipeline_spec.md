@@ -1,5 +1,9 @@
 # eBPF Fuzzing Pipeline — Formal Specification
 
+> ⚠️ **SUPERSEDED by [`PROJECT_HISTORY.md`](PROJECT_HISTORY.md).** This early spec frames success
+> as *pass-rate*; the project's actual metric is **unique KCOV PCs from valid programs** (valid
+> *and* diverse). Kept for historical reference only — do not cite its framing.
+
 **Version:** 1.0  
 **Status:** Draft — for advisor review  
 **Scope:** ML-guided eBPF program generation and kernel validation

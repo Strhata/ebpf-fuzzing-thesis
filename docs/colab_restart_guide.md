@@ -16,9 +16,9 @@ the model checkpoint is safe on Google Drive. This guide gets training back in ~
 - [ ] Google Drive folder exists: `My Drive/grpo-depth-reward-v1/`
 - [ ] Colab secrets set: `GITHUB_TOKEN`, `WANDB_API_KEY`, `REWARD_API_KEY`, `REWARD_SERVER_URL`
 - [ ] Local reward server running (`tmux` session `reward-server` on local machine)
-- [ ] Cloudflare Quick Tunnel running (`tmux` session `reward-tunnel` on local machine)
-  — URL is stable while `cloudflared` is running; only changes on machine reboot
-  — see `docs/cloudflare_tunnel_setup.md` for setup and reboot recovery
+- [ ] ngrok tunnel running (`tmux` session `reward-tunnel` on local machine)
+  — on a static domain the URL never changes; only re-run after a host boot
+  — see `docs/ngrok_tunnel_setup.md` for setup and reboot recovery
 
 ---
 
@@ -83,14 +83,15 @@ after training starts). If you see retry warnings:
 
 Check on local machine:
 ```bash
-tmux ls                          # confirm reward-server and cf-tunnel sessions exist
+tmux ls                          # confirm reward-server and reward-tunnel sessions exist
 curl -s -o /dev/null -w "%{http_code}" -H "X-API-Key: $REWARD_API_KEY" \
+  -H "ngrok-skip-browser-warning: true" \
   "$REWARD_SERVER_URL/rewards" -d '{"completions":["test"]}'
 ```
 
-The Quick Tunnel URL is stable as long as `cloudflared` is running — if the
-`reward-tunnel` tmux session is alive the URL has not changed and `REWARD_SERVER_URL`
-does not need updating. Only a machine reboot changes the URL.
+On a static ngrok domain `REWARD_SERVER_URL` never changes — a Colab restart needs no update,
+and a host reboot only needs the `reward-server` + `reward-tunnel` tmux sessions restarted
+(same URL). See `docs/ngrok_tunnel_setup.md`.
 
 ### 7 — Close the browser
 

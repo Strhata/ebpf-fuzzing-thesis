@@ -2,8 +2,9 @@
 """
 rl_grpo.py — GRPO RL training for eBPF program generation.
 
-Starts from checkpoints/sft_retrain/sft_adapter (merged SFT model from train.py)
-and fine-tunes with GRPO using KCOV-based rewards from the eval VM.
+Starts from the merged fp16 SFT model (default checkpoints/sft_retrain/checkpoint-1500-merged)
+and fine-tunes with GRPO using KCOV-based rewards from the eval VM. The merged model is loaded
+in bf16 (NOT 4-bit — 4-bit quantising a merged fine-tune collapses it; see --load-4bit).
 
 Do NOT use rl_grpo_v2, rl_grpo_v3, or rl_grpo_cmp* checkpoints as starting points.
 
@@ -178,7 +179,10 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
     Retries with exponential backoff for up to 5 minutes on any network error.
     """
     endpoint = base_url.rstrip("/") + "/rewards"
-    headers = {"X-API-Key": api_key}
+    # ngrok free tier serves a browser-warning interstitial (HTML) instead of the
+    # JSON response unless this header is present → resp.json() would fail. Harmless
+    # on cloudflared/other tunnels.
+    headers = {"X-API-Key": api_key, "ngrok-skip-browser-warning": "true"}
 
     def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
         payload = {"completions": completions}
@@ -267,15 +271,18 @@ def main():
     )
     ap.add_argument("--smoke-test", action="store_true",
                     help="10 steps, G=2, mock reward — no VM required")
-    ap.add_argument("--model", default=str(_REPO_ROOT / "checkpoints" / "sft_retrain" / "sft_adapter"),
-                    help="Path to base model (merged SFT adapter from train.py)")
+    ap.add_argument("--model", default=str(_REPO_ROOT / "checkpoints" / "sft_retrain" / "checkpoint-1500-merged"),
+                    help="Path to the merged fp16 SFT model (e.g. checkpoint-1500-merged). "
+                         "Loaded in bf16 by default — do NOT 4-bit a merged fine-tune "
+                         "(benchmark: merged_bnb4bit → 0%% valid). Use --load-4bit only with "
+                         "an unmerged base + adapter.")
     ap.add_argument("--output-dir", default=str(_REPO_ROOT / "checkpoints" / "rl_grpo"))
     ap.add_argument("--resume", action="store_true",
                     help="Auto-resume from latest checkpoint in output-dir and continue WandB run")
     ap.add_argument("--run-name", default="grpo-rl-v1",
                     help="WandB run name (default: grpo-rl-v1)")
     ap.add_argument("--remote-reward-url", default=None,
-                    help="Base URL of reward server (e.g. https://xxx.trycloudflare.com). "
+                    help="Base URL of reward server (e.g. https://your-name.ngrok-free.app). "
                          "When set, reward.py and SSH are not used. "
                          "API key read from REWARD_API_KEY env var.")
     ap.add_argument("--vm-host", default="localhost")
@@ -292,6 +299,11 @@ def main():
                     help="Stop after this many steps (-1 = run until end of dataset)")
     ap.add_argument("--beta", type=float, default=0.05,
                     help="KL penalty coefficient — 0.05 anchors policy to SFT distribution")
+    ap.add_argument("--load-4bit", action="store_true",
+                    help="Load base in 4-bit NF4 (QLoRA). Only for an UNMERGED base model. "
+                         "Default off: a merged SFT fine-tune is loaded in bf16, because "
+                         "4-bit quantising a merged model collapses its quality "
+                         "(benchmark: sft_retrain merged_bnb4bit → 0%% valid, 0 PCs).")
     ap.add_argument("--sanity-interval", type=int, default=3600,
                     help="Seconds between sanity checks (default 1h; 0 = disabled)")
     args = ap.parse_args()
@@ -326,17 +338,27 @@ def main():
 
     ssh = rw.SSHClient(host=args.vm_host, port=args.vm_port, key=args.vm_key)
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    print(f"[*] Loading model from {args.model}")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
+    if args.load_4bit:
+        print(f"[*] Loading model from {args.model} (4-bit NF4 / QLoRA)")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            quantization_config=bnb_config,
+            device_map="auto",
+        )
+    else:
+        # Default: bf16. A merged SFT fine-tune must NOT be 4-bit quantised
+        # (benchmark: merged_bnb4bit → 0% valid). The RL LoRA below trains on top.
+        print(f"[*] Loading model from {args.model} (bf16, no quantisation)")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
     # Required for gradient checkpointing with PEFT LoRA
     model.enable_input_require_grads()
     # TRL 0.14 / PEFT 0.18 compat: TRL sets model.warnings_issued["estimate_tokens"] after
