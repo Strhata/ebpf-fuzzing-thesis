@@ -106,10 +106,23 @@ def tokenize(sample: dict, tokenizer) -> dict:
 # Training arguments
 # ---------------------------------------------------------------------------
 
-def make_training_args(output_dir: Path) -> TrainingArguments:
+def make_training_args(
+    output_dir: Path,
+    epochs: int = 3,
+    eval_steps: int | None = None,
+    save_steps: int = 500,
+    max_steps: int = -1,
+) -> TrainingArguments:
+    # eval every N steps if eval_steps given, else once per epoch
+    eval_kwargs = (
+        dict(eval_strategy="steps", eval_steps=eval_steps)
+        if eval_steps
+        else dict(eval_strategy="epoch")
+    )
     return TrainingArguments(
         output_dir=str(output_dir),
-        num_train_epochs=3,
+        num_train_epochs=epochs,
+        max_steps=max_steps,          # -1 = use epochs; >0 overrides for smoke runs
         per_device_train_batch_size=1,
         per_device_eval_batch_size=4,
         gradient_accumulation_steps=8,
@@ -120,10 +133,10 @@ def make_training_args(output_dir: Path) -> TrainingArguments:
         gradient_checkpointing=True,  # recompute activations to fit 2048-token sequences in VRAM
         optim="paged_adamw_8bit",
         logging_steps=10,
-        save_steps=500,
-        eval_strategy="epoch",
+        save_steps=save_steps,
         seed=42,
         report_to="wandb",
+        **eval_kwargs,
     )
 
 
@@ -214,7 +227,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument("--data",       type=Path, default=ENRICHED_DATA)
+    ap.add_argument("--epochs",     type=int,  default=3, help="number of training epochs")
+    ap.add_argument("--eval-steps", type=int,  default=None,
+                    help="eval+save every N steps (default: once per epoch)")
+    ap.add_argument("--save-steps", type=int,  default=None,
+                    help="checkpoint every N steps (default: aligned to --eval-steps, else 500)")
+    ap.add_argument("--max-steps",  type=int,  default=-1,
+                    help="stop after N optimizer steps; overrides --epochs (for smoke tests)")
+    ap.add_argument("--resume",     action="store_true",
+                    help="resume from the last checkpoint in --output-dir if present")
+    ap.add_argument("--run-name",   type=str,  default="sft-retrain", help="WandB run name")
     args = ap.parse_args()
+
+    # align checkpoints with evals so a resume lands on an evaluated step
+    save_steps = args.save_steps or args.eval_steps or 500
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.data.exists():
         print(f"[!] Enriched dataset not found: {args.data}", file=sys.stderr)
@@ -283,9 +310,15 @@ def main():
     # --- 4. Trainer ---
     from transformers import Trainer
 
-    wandb.init(project="ebpf-thesis", name="sft-retrain", reinit=True)
+    wandb.init(project="ebpf-thesis", name=args.run_name, reinit=True)
 
-    training_args = make_training_args(args.output_dir)
+    training_args = make_training_args(
+        args.output_dir,
+        epochs=args.epochs,
+        eval_steps=args.eval_steps,
+        save_steps=save_steps,
+        max_steps=args.max_steps,
+    )
     callbacks = [EncoderPassRateCallback(val_samples, tokenizer)]
 
     trainer = Trainer(
@@ -296,7 +329,17 @@ def main():
         callbacks=callbacks,
     )
 
-    trainer.train()
+    # resume from last checkpoint on Drive if present (survives Colab session death)
+    resume_ckpt = None
+    if args.resume:
+        from transformers.trainer_utils import get_last_checkpoint
+        resume_ckpt = get_last_checkpoint(str(args.output_dir))
+        if resume_ckpt:
+            print(f"[*] Resuming from {resume_ckpt}", flush=True)
+        else:
+            print("[*] --resume set but no checkpoint found; starting fresh", flush=True)
+
+    trainer.train(resume_from_checkpoint=resume_ckpt)
 
     adapter_path = args.output_dir / "sft_adapter"
     trainer.save_model(str(adapter_path))
