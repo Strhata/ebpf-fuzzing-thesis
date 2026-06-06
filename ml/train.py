@@ -27,7 +27,12 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 # disabled via disable_tqdm below. logging_steps text lines still print cleanly.
 try:
     import datasets
+    import datasets.config
     datasets.disable_progress_bars()
+    # datasets 4.0 torch formatter runs `from torchvision.io import VideoReader`, which is
+    # absent in Colab's torchvision -> ImportError during set_format("torch"). We only
+    # tensorize int lists (no image/video columns), so disable the torchvision path entirely.
+    datasets.config.TORCHVISION_AVAILABLE = False
 except Exception:
     pass
 
