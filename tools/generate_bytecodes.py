@@ -70,6 +70,10 @@ def main():
                     help="Base seed; program i uses seed+i.")
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--max-new-tokens", type=int, default=400)
+    ap.add_argument("--batch-size", type=int, default=1,
+                    help="Generate this many programs per model.generate call. "
+                         ">1 uses batched left-padded inference (faster) but seeds "
+                         "once per batch, not per program (loses per-record reproducibility).")
     ap.add_argument("--out", default=None,
                     help="Output JSONL (default: data/reconstruction/sft_v1_<UTCdate>.jsonl)")
     args = ap.parse_args()
@@ -84,14 +88,32 @@ def main():
     print(f"[*] Generating {args.n} programs from {args.model} (seed base {args.seed})")
     model, tokenizer = load_model(args.model)
 
+    # --- generation: per-seed (reproducible) or batched (faster) ---
+    if args.batch_size > 1:
+        import torch
+        from benchmark_lib import generate_batch  # noqa: E402
+        print(f"[*] Batched generation (batch_size={args.batch_size}); "
+              f"seeded once per batch, not per program")
+        torch.manual_seed(args.seed)
+        res = generate_batch(
+            model, tokenizer, [_PROMPT] * args.n, args.max_new_tokens,
+            do_sample=True, temperature=args.temperature, batch_size=args.batch_size,
+        )
+        assemblies = [t.strip() for t in res.texts]
+        seeds = [args.seed] * args.n  # batch-seeded, not per-program
+    else:
+        assemblies = [
+            generate_one(model, tokenizer, args.seed + i, args.temperature, args.max_new_tokens)
+            for i in range(args.n)
+        ]
+        seeds = [args.seed + i for i in range(args.n)]
+
     clang_ok = 0
     encoder_ok = 0
     with out_path.open("w") as fout, tempfile.TemporaryDirectory() as tmpdir:
         for i in range(args.n):
-            seed_i = args.seed + i
-            assembly = generate_one(
-                model, tokenizer, seed_i, args.temperature, args.max_new_tokens
-            )
+            seed_i = seeds[i]
+            assembly = assemblies[i]
             # Path A — faithful 60%-era: verifier-log → parser → clang → objcopy.
             clang_hex = compile_to_hex(assembly, tmpdir)
             # Path B — 19%-era pure encoder: strip verifier log → infer opcodes,
@@ -111,6 +133,7 @@ def main():
                     "temperature": args.temperature,
                     "max_new_tokens": args.max_new_tokens,
                     "do_sample": True,
+                    "batch_size": args.batch_size,
                 },
                 "assembly": assembly,
                 "clang_hex": clang_hex or "",
