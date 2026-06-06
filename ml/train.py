@@ -22,6 +22,15 @@ import wandb
 from sklearn.model_selection import train_test_split
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
+# Piped (non-TTY) Colab output: progress bars use \r to redraw in a terminal but
+# newline-flood through a pipe. Silence the datasets "Map:" bar; the Trainer bar is
+# disabled via disable_tqdm below. logging_steps text lines still print cleanly.
+try:
+    import datasets
+    datasets.disable_progress_bars()
+except Exception:
+    pass
+
 REPO_ROOT = Path(__file__).parent.parent
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -133,6 +142,7 @@ def make_training_args(
         gradient_checkpointing=True,  # recompute activations to fit 2048-token sequences in VRAM
         optim="paged_adamw_8bit",
         logging_steps=10,
+        disable_tqdm=True,    # piped Colab output: rely on logging_steps text, not the \n-flooding bar
         save_steps=save_steps,
         seed=42,
         report_to="wandb",
