@@ -156,6 +156,12 @@ build-validator:
 	cp $(REPO_ROOT)/tools/ebpf_validator/ebpf_validator $(REPO_ROOT)/data/corpus/ebpf_validator
 	chmod +x $(REPO_ROOT)/data/corpus/ebpf_validator
 	@echo "[+] ebpf_validator → data/corpus/ebpf_validator"
+	@echo "[*] Building kcov_validator..."
+	cd $(REPO_ROOT)/tools/kcov_validator && \
+	    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o kcov_validator .
+	cp $(REPO_ROOT)/tools/kcov_validator/kcov_validator $(REPO_ROOT)/data/corpus/kcov_validator
+	chmod +x $(REPO_ROOT)/data/corpus/kcov_validator
+	@echo "[+] kcov_validator → data/corpus/kcov_validator"
 
 # ── VM IMAGE BUILD ──────────────────────────────────────────
 # Runs create-image.sh to build the Debian trixie VM disk image and
