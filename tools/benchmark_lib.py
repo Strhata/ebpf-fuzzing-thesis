@@ -231,6 +231,7 @@ def generate_batch(
     *,
     do_sample: bool = True,
     temperature: float = 1.0,
+    top_p: float | None = None,
     batch_size: int = 16,
 ) -> BatchGenResult:
     """Generate completions for many prompts using batched, left-padded inference.
@@ -258,13 +259,15 @@ def generate_batch(
                 enc = tokenizer(chunk, return_tensors="pt", padding=True)
                 enc = {k: v.to(model.device) for k, v in enc.items()}
                 input_len = enc["input_ids"].shape[1]
-                output = model.generate(
-                    **enc,
+                gen_kwargs = dict(
                     max_new_tokens=max_new_tokens,
                     do_sample=do_sample,
                     temperature=temperature,
                     pad_token_id=pad_id,
                 )
+                if top_p is not None:
+                    gen_kwargs["top_p"] = top_p
+                output = model.generate(**enc, **gen_kwargs)
                 for row in output:
                     new = row[input_len:]               # slice off the (padded) prompt
                     total_new += int(new.shape[0])
