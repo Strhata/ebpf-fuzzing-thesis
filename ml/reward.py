@@ -27,6 +27,9 @@ _PC_SET_PATH = _REPO_ROOT / "results" / "rl_pc_set.json"
 _MAX_PCS_SEEN_PATH = _REPO_ROOT / "results" / "rl_max_pcs_seen.json"
 _DEBUG_LOG = _REPO_ROOT / "results" / "reward_debug.log"
 
+# results/ is gitignored -> absent in a fresh clone (Colab). Create before the FileHandler opens.
+_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     filename=str(_DEBUG_LOG),
     level=logging.DEBUG,
