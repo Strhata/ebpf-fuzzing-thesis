@@ -5,6 +5,7 @@ result-mapping (encode-fail → ERROR, batched results mapped back by index, chu
 whole-chunk failure) by patching the batch-validate wrapper.
 """
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -57,3 +58,24 @@ def test_chunking_one_call_per_chunk():
     assert [len(c) for c in calls] == [2, 2, 1]
     assert len(res) == 5
     assert all(r.verdict == "ACCEPTED" for r in res)
+
+
+def test_candidates_roundtrip_preserves_meta_and_records(tmp_path):
+    meta = {"model": "m", "n": 3, "seed": 42, "tokens_per_sec": 123.4, "peak_run_gpu_mb": 999.0}
+    assemblies = ["asm0", "asm1 with\nnewline", "asm2"]
+    hexes = ["aa", None, "cc"]  # index 1 failed to encode → null in the artifact
+
+    path = tmp_path / "candidates.jsonl"
+    ds.write_candidates(path, meta, assemblies, hexes)
+    got_meta, got_asm, got_hex = ds.read_candidates(path)
+
+    assert got_meta == meta
+    assert got_asm == assemblies
+    assert got_hex == hexes
+
+
+def test_candidates_first_line_is_meta_header(tmp_path):
+    path = tmp_path / "candidates.jsonl"
+    ds.write_candidates(path, {"model": "m"}, ["asm0"], ["aa"])
+    first = path.read_text().splitlines()[0]
+    assert json.loads(first) == {"_meta": {"model": "m"}}
