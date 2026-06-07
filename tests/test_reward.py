@@ -39,11 +39,17 @@ _VALID_HEX = "00" * (20 * 8)
 
 
 def _mock_ssh(verdict: str, pcs: list[int] | None = None) -> MagicMock:
-    """Return an SSHClient mock that returns the given verdict."""
+    """Return an SSHClient mock that speaks the `kcov_validator --batch` protocol:
+    one JSON array sized to the stdin payload, every entry carrying the given
+    verdict/pcs. The real batch binary exits 0 on success regardless of verdicts."""
     client = MagicMock()
-    payload = json.dumps({"verdict": verdict, "pcs": pcs or []})
-    rc = 0 if verdict == "ACCEPTED" else 1
-    client.run.return_value = (rc, payload, "")
+
+    def _run(cmd, timeout=30, input=None):
+        lines = [ln for ln in (input or "").splitlines() if ln.strip()]
+        arr = [{"index": j, "verdict": verdict, "pcs": pcs or []} for j in range(len(lines))]
+        return (0, json.dumps(arr), "")
+
+    client.run.side_effect = _run
     return client
 
 
@@ -131,6 +137,65 @@ class TestRewardFormula(unittest.TestCase):
             rewards = rw.compute_rewards([_VALID_ASM], ssh)
         depth = min(0.5, 1 / 10 * 0.5)
         self.assertAlmostEqual(rewards[0], depth)
+
+    # --- batched validation (issue #24) ---
+
+    def test_single_ssh_call_for_whole_batch(self):
+        # N completions must result in exactly ONE ssh.run (one --batch call).
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(50)))
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rewards = rw.compute_rewards([_VALID_ASM] * 5, ssh)
+        self.assertEqual(len(rewards), 5)
+        ssh.run.assert_called_once()
+
+    def test_encode_fail_isolated_in_batch(self):
+        # One un-encodable completion scores 0.0 at its index; the rest validate.
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        ssh = _mock_ssh("ACCEPTED", pcs=list(range(50)))
+
+        def fake_encode(asm):
+            return None if asm == _BAD_ASM else _VALID_HEX
+
+        with patch.object(rw, "_encode_to_hex", side_effect=fake_encode):
+            rewards = rw.compute_rewards([_BAD_ASM, _VALID_ASM, _BAD_ASM], ssh)
+        self.assertEqual(rewards[0], 0.0)
+        self.assertGreater(rewards[1], 0.0)
+        self.assertEqual(rewards[2], 0.0)
+        ssh.run.assert_called_once()  # only the one valid program was sent
+
+    def test_batch_parity_mixed_verdicts(self):
+        # Parity: a single batched call with mixed verdicts produces exactly the
+        # reward vector the per-program formula yields, mapped back by index.
+        rw = self._rw()
+        rw._max_pcs_seen = 100
+        arr = [
+            {"index": 0, "verdict": "ACCEPTED", "pcs": list(range(40))},
+            {"index": 1, "verdict": "REJECTED", "pcs": list(range(40, 70))},  # 30 pcs
+            {"index": 2, "verdict": "ERROR", "pcs": []},
+        ]
+        ssh = MagicMock()
+        ssh.run.return_value = (0, json.dumps(arr), "")
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM, _VALID_ASM], ssh)
+        # max_pcs_seen=100 throughout (40,30 < 100); both have new PCs → +1.0 bonus
+        self.assertAlmostEqual(rewards[0], min(0.5, 40 / 100 * 0.5) + 1.0)
+        self.assertAlmostEqual(rewards[1], min(0.5, 30 / 100 * 0.5) + 1.0)
+        self.assertEqual(rewards[2], 0.0)  # ERROR → 0.0
+        ssh.run.assert_called_once()
+
+    def test_batch_timeout_gives_crash_reward_to_all(self):
+        # Whole-batch SSH timeout → crash reward for every validated program + watchdog.
+        rw = self._rw()
+        ssh = MagicMock()
+        ssh.run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=30)
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX), \
+             patch.object(rw, "_watchdog") as mock_watchdog:
+            rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
+        self.assertEqual(rewards, [2.0, 2.0])
+        mock_watchdog.assert_called_once_with(ssh)
 
     def test_within_batch_snapshot(self):
         # Both completions in one call return the same new PC.

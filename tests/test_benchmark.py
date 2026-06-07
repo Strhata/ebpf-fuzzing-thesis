@@ -27,8 +27,83 @@ from benchmark_lib import (
     VMShutdownError,
     aggregate,
     analyze,
+    generate_batch,
     validate,
 )
+
+
+# ---------------------------------------------------------------------------
+# Module 4: generate_batch (issue #23) — offline orchestration test with fakes
+# ---------------------------------------------------------------------------
+
+class _FakeTok:
+    """Minimal tokenizer: 1 token per character; left/right pad to batch max."""
+    pad_token_id = 0
+    eos_token_id = 2
+    pad_token = "<pad>"
+    eos_token = "<eos>"
+    padding_side = "right"
+
+    def __call__(self, chunk, return_tensors=None, padding=None):
+        import torch
+        seqs = [[1] * len(s) for s in chunk]  # toy: one id per char
+        L = max(len(s) for s in seqs)
+        ids, mask = [], []
+        for s in seqs:
+            pad = L - len(s)
+            if self.padding_side == "left":
+                ids.append([self.pad_token_id] * pad + s)
+                mask.append([0] * pad + [1] * len(s))
+            else:
+                ids.append(s + [self.pad_token_id] * pad)
+                mask.append([1] * len(s) + [0] * pad)
+        return {"input_ids": torch.tensor(ids), "attention_mask": torch.tensor(mask)}
+
+    def decode(self, tensor, skip_special_tokens=True):
+        return f"GEN{int(tensor.sum().item())}"
+
+
+class _FakeModel:
+    device = "cpu"
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate(self, input_ids=None, attention_mask=None, max_new_tokens=4, **kw):
+        import torch
+        self.calls += 1
+        B = input_ids.shape[0]
+        # append deterministic new tokens [1..max_new_tokens] to every row
+        new = torch.arange(1, max_new_tokens + 1).repeat(B, 1)
+        return torch.cat([input_ids, new], dim=1)
+
+
+def test_generate_batch_orchestration():
+    tok = _FakeTok()
+    model = _FakeModel()
+    prompts = ["a", "bb", "ccc", "dddd", "e"]  # varying lengths → padding exercised
+
+    res = generate_batch(model, tok, prompts, max_new_tokens=4, batch_size=2)
+
+    # one output per prompt, in order
+    assert len(res.texts) == len(prompts)
+    # 5 prompts at batch_size 2 → 3 generate calls
+    assert model.calls == 3
+    # new tokens are [1,2,3,4] for every row → decode sees only the new slice (sum=10),
+    # i.e. the (left-)padded prompt was correctly stripped regardless of prompt length
+    assert all(t == "GEN10" for t in res.texts)
+    # total new tokens = 5 prompts * 4 tokens
+    assert res.total_new_tokens == 20
+    # padding_side restored after the call
+    assert tok.padding_side == "right"
+
+
+def test_generate_batch_empty():
+    tok = _FakeTok()
+    model = _FakeModel()
+    res = generate_batch(model, tok, [], max_new_tokens=4, batch_size=2)
+    assert res.texts == []
+    assert model.calls == 0
 
 
 # ---------------------------------------------------------------------------
