@@ -254,6 +254,21 @@ def cmd_validate(args) -> None:
         for t, h, v in zip(assemblies, hexes, vres)
     ]
     kpis = aggregate(records, timing, peak_load_gpu_mb=0.0, peak_run_gpu_mb=peak_run_mb)
+
+    # Spine metric: diversity from VALID programs only. `kpis.total_unique_pcs` unions over
+    # ALL programs (rejected ones contribute verifier-rejection paths), which inflates it.
+    accepted = [r for r in records if r.validation.verdict == "ACCEPTED"]
+    valid_union: set[int] = set()
+    for r in accepted:
+        valid_union.update(r.validation.pcs)
+    valid_only = {
+        "n_accepted": len(accepted),
+        "valid_unique_pcs": len(valid_union),
+        "avg_distinct_pcs_per_valid": (
+            sum(len(set(r.validation.pcs)) for r in accepted) / len(accepted)
+            if accepted else 0.0
+        ),
+    }
     wall = time.monotonic() - t0
 
     report = {
@@ -263,13 +278,15 @@ def cmd_validate(args) -> None:
         "n": len(assemblies),
         "validate_wall_seconds": round(wall, 1),
         "kpis": asdict(kpis),
+        "valid_only": valid_only,
     }
     out_path.write_text(json.dumps(report, indent=2) + "\n")
 
     print(f"\n[+] n={len(assemblies)}  encode_rate={kpis.encode_rate:.3f}  "
           f"accept_rate={kpis.pass_rate:.3f}")
-    print(f"[+] total_unique_pcs={kpis.total_unique_pcs}  "
-          f"novelty_score={kpis.novelty_score:.4f}")
+    print(f"[+] total_unique_pcs={kpis.total_unique_pcs} (all progs)  "
+          f"VALID_unique_pcs={valid_only['valid_unique_pcs']} (n_accepted={valid_only['n_accepted']})")
+    print(f"[+] novelty_score={kpis.novelty_score:.4f}")
     print(f"[+] validate_wall={wall:.0f}s  gen_tokens_per_sec={kpis.tokens_per_sec:.0f}")
     print(f"[+] Report → {out_path}")
 
