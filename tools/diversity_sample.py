@@ -52,6 +52,7 @@ sys.path.insert(0, str(_REPO_ROOT / "ml"))
 from benchmark_lib import (  # noqa: E402
     GeneratorResult,
     ProgramRecord,
+    SlotKPIs,
     ValidationResult,
     aggregate,
     analyze,
@@ -132,6 +133,92 @@ def validations_from_batch(
 # --------------------------------------------------------------------------- #
 # generate (GPU stage)
 # --------------------------------------------------------------------------- #
+
+def aggregate_streaming(
+    assemblies: list[str],
+    hexes: list[str | None],
+    batch_validate,
+    timing: GeneratorResult,
+    peak_run_gpu_mb: float,
+    chunk_size: int = 500,
+) -> tuple[SlotKPIs, dict]:
+    """Memory-bounded equivalent of building ProgramRecords + aggregate().
+
+    Folds each program's KCOV trace into running sets/counters and discards the raw
+    PC list immediately, so peak memory is O(distinct PCs) not O(total PC hits × N).
+    Needed because a full N=20k run holds ~tens of thousands of PCs per program and
+    OOMs a small box. `batch_validate(hex_list) -> list[dict] | None` is the chunked
+    VM call (None = whole-chunk failure → those programs score as ERROR/no PCs).
+
+    Returns (SlotKPIs, valid_only) matching aggregate() + the cmd_validate valid_only block.
+    """
+    n = len(assemblies)
+
+    # --- complexity pass (no VM; independent per program) ---
+    n_encoded = sum_insn = jump_total = 0
+    sum_opdiv = 0.0
+    for t in assemblies:
+        c = analyze(t)
+        if c.encoded:
+            n_encoded += 1
+            sum_insn += c.insn_count
+            sum_opdiv += c.opcode_diversity
+            jump_total += c.jump_count
+
+    # --- validation fold (chunked; raw pcs discarded per program) ---
+    all_union: set[int] = set()
+    valid_union: set[int] = set()
+    freq: dict[int, int] = {}
+    n_accepted = sum_pcs_accepted = sum_distinct_accepted = max_pcs = 0
+
+    idx = [i for i, h in enumerate(hexes) if h]
+    for s in range(0, len(idx), chunk_size):
+        chunk_hex = [hexes[i] for i in idx[s:s + chunk_size]]
+        batch = batch_validate(chunk_hex)
+        if batch is None:
+            continue  # whole-chunk VM failure → ERROR, contributes no PCs
+        for res in batch:
+            pcs = res.get("pcs", [])
+            distinct = set(pcs)
+            all_union |= distinct
+            for pc in distinct:
+                freq[pc] = freq.get(pc, 0) + 1
+            if len(pcs) > max_pcs:
+                max_pcs = len(pcs)
+            if res.get("verdict") == "ACCEPTED":
+                n_accepted += 1
+                valid_union |= distinct
+                sum_pcs_accepted += len(pcs)
+                sum_distinct_accepted += len(distinct)
+            del pcs, distinct
+
+    novelty = (
+        sum(1.0 - freq[pc] / n for pc in all_union) / len(all_union)
+        if all_union else 0.0
+    )
+    kpis = SlotKPIs(
+        pass_rate=n_accepted / n if n else 0.0,
+        encode_rate=n_encoded / n if n else 0.0,
+        avg_pcs=sum_pcs_accepted / n_accepted if n_accepted else 0.0,
+        max_pcs=max_pcs,
+        total_unique_pcs=len(all_union),
+        novelty_score=novelty,
+        avg_insn_count=sum_insn / n_encoded if n_encoded else 0.0,
+        avg_opcode_diversity=sum_opdiv / n_encoded if n_encoded else 0.0,
+        avg_jump_count=jump_total / n_encoded if n_encoded else 0.0,
+        tokens_per_sec=timing.tokens_per_sec,
+        peak_load_gpu_mb=0.0,
+        peak_run_gpu_mb=peak_run_gpu_mb,
+    )
+    valid_only = {
+        "n_accepted": n_accepted,
+        "valid_unique_pcs": len(valid_union),
+        "avg_distinct_pcs_per_valid": (
+            sum_distinct_accepted / n_accepted if n_accepted else 0.0
+        ),
+    }
+    return kpis, valid_only
+
 
 def _load_model(path: str, adapter: str | None = None):
     """Load a bf16 model. If `adapter` is given, load it on top of the base at `path`
@@ -243,32 +330,19 @@ def cmd_validate(args) -> None:
     key = args.key or SSHClient.__dataclass_fields__["key"].default
     ssh = SSHClient(host=args.host, port=args.port, key=key)
     print(f"[*] Validating {sum(h is not None for h in hexes)} encoded programs via --batch")
-    vres = validations_from_batch(hexes, ssh, chunk_size=args.val_chunk)
 
     # Timing/throughput come from the generate stage (recorded in _meta).
     timing = GeneratorResult(assemblies=assemblies, tokens_per_sec=meta.get("tokens_per_sec", 0.0))
     peak_run_mb = meta.get("peak_run_gpu_mb", 0.0)
 
-    records = [
-        ProgramRecord(assembly=t, hex_str=h, complexity=analyze(t), validation=v)
-        for t, h, v in zip(assemblies, hexes, vres)
-    ]
-    kpis = aggregate(records, timing, peak_load_gpu_mb=0.0, peak_run_gpu_mb=peak_run_mb)
-
-    # Spine metric: diversity from VALID programs only. `kpis.total_unique_pcs` unions over
-    # ALL programs (rejected ones contribute verifier-rejection paths), which inflates it.
-    accepted = [r for r in records if r.validation.verdict == "ACCEPTED"]
-    valid_union: set[int] = set()
-    for r in accepted:
-        valid_union.update(r.validation.pcs)
-    valid_only = {
-        "n_accepted": len(accepted),
-        "valid_unique_pcs": len(valid_union),
-        "avg_distinct_pcs_per_valid": (
-            sum(len(set(r.validation.pcs)) for r in accepted) / len(accepted)
-            if accepted else 0.0
-        ),
-    }
+    # Streaming aggregation: folds each program's KCOV trace into running sets/counters
+    # and frees the raw PCs, so N=20k+ does not OOM. `valid_only` is the spine metric
+    # (unique PCs from ACCEPTED programs only; total_unique_pcs unions over ALL programs).
+    kpis, valid_only = aggregate_streaming(
+        assemblies, hexes,
+        batch_validate=lambda hx: _batch_validate_fn(hx, ssh),
+        timing=timing, peak_run_gpu_mb=peak_run_mb, chunk_size=args.val_chunk,
+    )
     wall = time.monotonic() - t0
 
     report = {

@@ -79,3 +79,52 @@ def test_candidates_first_line_is_meta_header(tmp_path):
     ds.write_candidates(path, {"model": "m"}, ["asm0"], ["aa"])
     first = path.read_text().splitlines()[0]
     assert json.loads(first) == {"_meta": {"model": "m"}}
+
+
+def test_aggregate_streaming_known_values():
+    from benchmark_lib import ComplexityResult, GeneratorResult
+
+    assemblies = ["", "", ""]          # complexity patched out below
+    hexes = ["a", "b", "c"]            # all encoded → all sent to the VM
+    batch = [
+        {"verdict": "ACCEPTED", "pcs": [1, 2, 2, 3]},   # distinct {1,2,3}, len 4
+        {"verdict": "REJECTED", "pcs": [2, 4]},          # distinct {2,4}
+        {"verdict": "ACCEPTED", "pcs": []},              # distinct {}
+    ]
+    comp = ComplexityResult(encoded=False, insn_count=None, opcode_diversity=None, jump_count=None)
+
+    with patch.object(ds, "analyze", return_value=comp):
+        kpis, valid_only = ds.aggregate_streaming(
+            assemblies, hexes,
+            batch_validate=lambda hx: batch,
+            timing=GeneratorResult(assemblies=assemblies, tokens_per_sec=42.0),
+            peak_run_gpu_mb=7.0, chunk_size=500,
+        )
+
+    # union over ALL programs = {1,2,3,4}; freq = {1:1, 2:2, 3:1, 4:1}; n=3
+    assert kpis.total_unique_pcs == 4
+    assert kpis.max_pcs == 4
+    assert abs(kpis.pass_rate - 2 / 3) < 1e-9
+    # novelty = mean(1 - freq/3) over {1,2,3,4} = (2/3 + 1/3 + 2/3 + 2/3)/4
+    assert abs(kpis.novelty_score - (2/3 + 1/3 + 2/3 + 2/3) / 4) < 1e-9
+    assert abs(kpis.avg_pcs - 2.0) < 1e-9          # (4 + 0) / 2 accepted
+    # valid-only: accepted programs 0 and 2 → union {1,2,3}
+    assert valid_only["n_accepted"] == 2
+    assert valid_only["valid_unique_pcs"] == 3
+    assert abs(valid_only["avg_distinct_pcs_per_valid"] - 1.5) < 1e-9  # (3 + 0) / 2
+
+
+def test_aggregate_streaming_whole_chunk_failure_no_pcs():
+    from benchmark_lib import ComplexityResult, GeneratorResult
+
+    comp = ComplexityResult(encoded=False, insn_count=None, opcode_diversity=None, jump_count=None)
+    with patch.object(ds, "analyze", return_value=comp):
+        kpis, valid_only = ds.aggregate_streaming(
+            ["", ""], ["a", "b"],
+            batch_validate=lambda hx: None,   # whole-chunk VM failure
+            timing=GeneratorResult(assemblies=["", ""], tokens_per_sec=0.0),
+            peak_run_gpu_mb=0.0,
+        )
+    assert kpis.total_unique_pcs == 0
+    assert kpis.pass_rate == 0.0
+    assert valid_only == {"n_accepted": 0, "valid_unique_pcs": 0, "avg_distinct_pcs_per_valid": 0.0}

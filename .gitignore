@@ -70,3 +70,6 @@ diagnostic_data/
 results/
 tools/kcov_validator/kcov_validator
 data/corpus/kcov_validator
+
+# Local model notes (scratch reminder, not canonical)
+docs/MODEL_NOTES.md
