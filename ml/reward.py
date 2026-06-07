@@ -89,13 +89,14 @@ class SSHClient:
         "-o", "BatchMode=yes",
     ])
 
-    def run(self, cmd: str, timeout: int = 30) -> tuple[int, str, str]:
+    def run(self, cmd: str, timeout: int = 30, input: str | None = None) -> tuple[int, str, str]:
         result = subprocess.run(
             ["ssh", "-p", str(self.port), "-i", self.key,
              "-o", f"ConnectTimeout={timeout}",
              *self._SSH_OPTS,
              f"{self.user}@{self.host}", cmd],
             capture_output=True, text=True, timeout=timeout + 5,
+            input=input,
         )
         return result.returncode, result.stdout, result.stderr
 
@@ -360,6 +361,34 @@ def _validate_on_vm(hex_str: str, ssh: SSHClient) -> dict | None:
         return None
 
 
+def _validate_batch_on_vm(hex_list: list[str], ssh: SSHClient) -> list[dict] | None:
+    """Validate many programs in ONE kcov_validator --batch call (hex piped via stdin).
+
+    Returns a list of result dicts in input order, or None if the whole batch
+    failed (SSH timeout / non-zero exit / unparseable output) so the caller can
+    apply the crash reward uniformly. The validator preserves input order, so
+    result[i] corresponds to hex_list[i].
+    """
+    if not hex_list:
+        return []
+    payload = "\n".join(hex_list) + "\n"
+    # Per-program work is sub-ms; scale the ceiling with batch size for bulk runs.
+    timeout = max(30, len(hex_list) // 10)
+    try:
+        rc, stdout, _ = ssh.run("/mnt/corpus/kcov_validator --batch", timeout=timeout, input=payload)
+    except subprocess.TimeoutExpired:
+        return None
+    if rc != 0:
+        return None
+    try:
+        parsed = json.loads(stdout.strip())
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, list) or len(parsed) != len(hex_list):
+        return None
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Public reward function
 # ---------------------------------------------------------------------------
@@ -379,11 +408,14 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     """
     global _pc_set, _max_pcs_seen, _call_count, _last_pcs_per_program
 
-    rewards: list[float] = []
-    pcs_per_program: list[int] = []
+    n = len(completions)
+    rewards: list[float] = [0.0] * n
+    pcs_per_program: list[int] = [0] * n
     batch_id = _call_count
     pc_set_snapshot = frozenset(_pc_set)
 
+    # --- pass 1: encode + instruction floor; collect programs that need the VM ---
+    to_validate: list[tuple[int, str]] = []   # (original index, hex)
     for i, assembly in enumerate(completions):
         preview = assembly[:120].replace("\n", "\\n")
         if batch_id < 3:
@@ -392,49 +424,52 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
 
         if not hex_str:
             _log.debug("batch=%d i=%d ENCODE_FAIL preview=%r", batch_id, i, preview)
-            rewards.append(0.0)
-            pcs_per_program.append(0)
-            continue
+            continue  # reward stays 0.0
 
         insn_count = len(hex_str) // 16
         if insn_count < _MIN_INSTRUCTION_COUNT:
             _log.debug("batch=%d i=%d FLOOR insn_count=%d preview=%r",
                        batch_id, i, insn_count, preview)
-            rewards.append(0.0)
-            pcs_per_program.append(0)
-            continue
+            continue  # reward stays 0.0
 
-        result = _validate_on_vm(hex_str, ssh)
+        to_validate.append((i, hex_str))
 
-        if result is None:
-            _log.debug("batch=%d i=%d SSH_TIMEOUT hex_len=%d", batch_id, i, len(hex_str))
+    # --- one batched VM call for everything that passed the filter ---
+    if to_validate:
+        results = _validate_batch_on_vm([h for _, h in to_validate], ssh)
+
+        if results is None:
+            # whole-batch SSH timeout / VM failure → crash reward for all, kick watchdog
+            _log.debug("batch=%d BATCH_TIMEOUT n=%d", batch_id, len(to_validate))
             _watchdog(ssh)
-            rewards.append(2.0)
-            pcs_per_program.append(0)
-            continue
+            for orig_i, _ in to_validate:
+                rewards[orig_i] = 2.0
+        else:
+            # results[j] corresponds to to_validate[j] (validator preserves input order).
+            # Process in original order so _max_pcs_seen accrues exactly as the
+            # per-program path did (parity).
+            for (orig_i, _hex), result in zip(to_validate, results):
+                verdict = result.get("verdict", "ERROR")
+                if verdict == "ERROR":
+                    _log.debug("batch=%d i=%d ERROR", batch_id, orig_i)
+                    continue  # reward stays 0.0
 
-        verdict = result.get("verdict", "ERROR")
-        if verdict == "ERROR":
-            _log.debug("batch=%d i=%d ERROR preview=%r", batch_id, i, preview)
-            rewards.append(0.0)
-            pcs_per_program.append(0)
-            continue
+                total_pcs = set(result.get("pcs", []))
+                new_pcs = total_pcs - pc_set_snapshot
+                _pc_set.update(total_pcs)
 
-        total_pcs = set(result.get("pcs", []))
-        new_pcs = total_pcs - pc_set_snapshot
-        _pc_set.update(total_pcs)
+                depth_component = min(0.5, len(total_pcs) / _max_pcs_seen * 0.5)
+                discovery_bonus = 1.0 if new_pcs else 0.0
+                r = depth_component + discovery_bonus
 
-        depth_component = min(0.5, len(total_pcs) / _max_pcs_seen * 0.5)
-        discovery_bonus = 1.0 if new_pcs else 0.0
-        r = depth_component + discovery_bonus
+                if len(total_pcs) > _max_pcs_seen:
+                    _max_pcs_seen = len(total_pcs)
 
-        if len(total_pcs) > _max_pcs_seen:
-            _max_pcs_seen = len(total_pcs)
-
-        _log.debug("batch=%d i=%d %s pcs=%d new=%d depth_r=%.3f reward=%.3f",
-                   batch_id, i, verdict, len(total_pcs), len(new_pcs), depth_component, r)
-        rewards.append(r)
-        pcs_per_program.append(len(total_pcs))
+                _log.debug("batch=%d i=%d %s pcs=%d new=%d depth_r=%.3f reward=%.3f",
+                           batch_id, orig_i, verdict, len(total_pcs), len(new_pcs),
+                           depth_component, r)
+                rewards[orig_i] = r
+                pcs_per_program[orig_i] = len(total_pcs)
 
     _last_pcs_per_program = pcs_per_program
     _call_count += 1

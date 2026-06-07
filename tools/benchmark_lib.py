@@ -216,42 +216,88 @@ class GeneratorResult:
     tokens_per_sec: float
 
 
+@dataclass
+class BatchGenResult:
+    texts: list[str]          # decoded NEW tokens (prompt stripped), one per prompt, in order
+    total_new_tokens: int
+    seconds: float
+
+
+def generate_batch(
+    model: object,
+    tokenizer: object,
+    prompts: list[str],
+    max_new_tokens: int,
+    *,
+    do_sample: bool = True,
+    temperature: float = 1.0,
+    top_p: float | None = None,
+    batch_size: int = 16,
+) -> BatchGenResult:
+    """Generate completions for many prompts using batched, left-padded inference.
+
+    Decoder-only models must be **left-padded** so generation continues from each
+    prompt's real last token; an attention mask hides the padding. Returns the
+    decoded new tokens per prompt (prompt prefix stripped), in input order.
+    """
+    import torch
+
+    # Decoder-only generation requires left padding + a pad token.
+    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None) is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    prev_side = getattr(tokenizer, "padding_side", "right")
+    tokenizer.padding_side = "left"
+
+    texts: list[str] = []
+    total_new = 0
+    t0 = time.monotonic()
+    try:
+        with torch.no_grad():
+            for start in range(0, len(prompts), batch_size):
+                chunk = prompts[start:start + batch_size]
+                enc = tokenizer(chunk, return_tensors="pt", padding=True)
+                enc = {k: v.to(model.device) for k, v in enc.items()}
+                input_len = enc["input_ids"].shape[1]
+                gen_kwargs = dict(
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    temperature=temperature,
+                    pad_token_id=pad_id,
+                )
+                if top_p is not None:
+                    gen_kwargs["top_p"] = top_p
+                output = model.generate(**enc, **gen_kwargs)
+                for row in output:
+                    new = row[input_len:]               # slice off the (padded) prompt
+                    total_new += int(new.shape[0])
+                    texts.append(tokenizer.decode(new, skip_special_tokens=True))
+    finally:
+        tokenizer.padding_side = prev_side
+
+    return BatchGenResult(texts=texts, total_new_tokens=total_new, seconds=time.monotonic() - t0)
+
+
 def generate(
     model: object,
     tokenizer: object,
     config: BenchmarkConfig,
     prompt_text: str,
     n: int,
+    batch_size: int = 1,
 ) -> GeneratorResult:
-    """Run inference loop for a single prompt; return n assemblies + timing."""
-    import torch
+    """Run inference for a single prompt sampled n times; return n assemblies + timing.
 
-    inputs = tokenizer(prompt_text, return_tensors="pt").to(model.device)
-    prompt_len: int = inputs.input_ids.shape[1]
-
-    assemblies: list[str] = []
-    total_tokens = 0
-    total_seconds = 0.0
-
-    with torch.no_grad():
-        for _ in range(n):
-            t0 = time.monotonic()
-            output = model.generate(
-                **inputs,
-                max_new_tokens=config.max_new_tokens,
-                do_sample=True,
-                temperature=config.temperature,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-            elapsed = time.monotonic() - t0
-            new_tokens = output[0][prompt_len:]
-            total_tokens += len(new_tokens)
-            total_seconds += elapsed
-            text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-            assemblies.append(text)
-
-    tokens_per_sec = total_tokens / total_seconds if total_seconds > 0 else 0.0
-    return GeneratorResult(assemblies=assemblies, tokens_per_sec=tokens_per_sec)
+    With batch_size > 1 the n samples are generated in batched, left-padded calls
+    (sampling makes each row independent); batch_size = 1 preserves the original
+    one-at-a-time behaviour.
+    """
+    res = generate_batch(
+        model, tokenizer, [prompt_text] * n, config.max_new_tokens,
+        do_sample=True, temperature=config.temperature, batch_size=batch_size,
+    )
+    tokens_per_sec = res.total_new_tokens / res.seconds if res.seconds > 0 else 0.0
+    return GeneratorResult(assemblies=res.texts, tokens_per_sec=tokens_per_sec)
 
 
 # ---------------------------------------------------------------------------
