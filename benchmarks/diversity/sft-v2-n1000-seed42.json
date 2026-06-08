@@ -1,0 +1,40 @@
+{
+  "generated_utc": "2026-06-07T15:09:07.348668+00:00",
+  "candidates": "benchmarks/diversity/candidates/sft-v2-n1000-seed42.jsonl",
+  "meta": {
+    "model": "Qwen/Qwen2.5-Coder-1.5B + adapter:/content/drive/MyDrive/sft-1epoch-v2/sft_adapter",
+    "n": 1000,
+    "seed": 42,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "max_new_tokens": 512,
+    "batch_size": 256,
+    "prompt": "[coverage=high][novelty=high]\n### ASSEMBLY:\n",
+    "generated_utc": "2026-06-07T14:40:26.402272+00:00",
+    "gen_seconds": 173.1,
+    "total_new_tokens": 512000,
+    "tokens_per_sec": 2957.641649434738,
+    "peak_run_gpu_mb": 8992.616448
+  },
+  "n": 1000,
+  "validate_wall_seconds": 16.6,
+  "kpis": {
+    "pass_rate": 0.075,
+    "encode_rate": 1.0,
+    "avg_pcs": 99380.53333333334,
+    "max_pcs": 161984,
+    "total_unique_pcs": 4749,
+    "novelty_score": 0.7524407243630014,
+    "avg_insn_count": 30.22,
+    "avg_opcode_diversity": 0.5898869815025849,
+    "avg_jump_count": 3.885,
+    "tokens_per_sec": 2957.641649434738,
+    "peak_load_gpu_mb": 0.0,
+    "peak_run_gpu_mb": 8992.616448
+  },
+  "valid_only": {
+    "n_accepted": 75,
+    "valid_unique_pcs": 3462,
+    "avg_distinct_pcs_per_valid": 2337.3333333333335
+  }
+}
