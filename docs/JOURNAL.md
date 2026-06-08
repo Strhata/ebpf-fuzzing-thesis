@@ -106,8 +106,10 @@ Then restructured docs into this model: always-current `FACTS.md`, append-only `
 ## 2026-06-08 — RL-2 reading corrected *(clarifies the RL-2 phase-B entry above)*
 The earlier RL-2 entry called the phase-B null "evidence for the thesis (diversity is the wall)." That
 **overclaims** and is withdrawn. Corrected reading, from WandB run `bz5ymfzl` (phase-B, 207 steps):
-the run is ~40× shorter than RL-1's 8,370 steps; `reward/std` stayed > 0 (0.41 → 0.024 — the RL-1
-starvation did **not** recur) and `cumulative_pcs` rose 4320 → 4836 but **decelerating** (last ~50
+the run is ~40× shorter than RL-1's 8,370 steps; `reward/std` stays alive — **mean 0.224** (median
+0.230, range 0.01–0.44) vs **RL-1's mean 0.001 (99 % of steps exactly 0)**, so the RL-1 starvation did
+**not** recur (it fluctuates, never sustained-zero) — and `cumulative_pcs` rose 4320 → 4836 but
+**decelerating** (last ~50
 steps +31). That is *too short to tell* whether coverage would plateau or break through. The
 valid-unique metric (3606) sits on the SFT-2 saturation curve, but **the saturation/mode-collapse wall
 is an SFT-2 property** (measured on SFT-2 generations); whether KCOV-reward RL can exceed it is **open
