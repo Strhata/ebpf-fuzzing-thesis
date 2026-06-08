@@ -70,3 +70,7 @@ diagnostic_data/
 results/
 tools/kcov_validator/kcov_validator
 data/corpus/kcov_validator
+tools/ebpf_validator/ebpf_validator
+
+# large per-program benchmark dumps (full PC traces); keep the _report.md + summary.csv
+benchmarks/runs/*_run.json
