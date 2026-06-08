@@ -157,8 +157,9 @@ Secrets: `REWARD_SERVER_URL`, `REWARD_API_KEY`, `WANDB_API_KEY`, `GITHUB_TOKEN`.
 `valid_rate`, `verdict/{accepted,rejected,encode_fail,error,crash}`, `novelty/group_mean`,
 `novelty/global_mean`, `novelty/global_frontier`, plus TRL's `kl`, `grad_norm`, `loss`.
 
-**Tests:** `tests/test_reward.py` (88 reward+encoder+server tests) incl. the RL-v1 regression guard
-`test_all_rejected_group_still_has_variance` and the phase-B decay/snapshot/accepted-only tests.
+**Tests:** 88 across `tests/test_reward.py` (32, incl. the RL-v1 regression guard
+`test_all_rejected_group_still_has_variance` and the phase-B decay/snapshot/accepted-only tests),
+`tests/test_reward_encoder.py` (50), and `tests/test_reward_server.py` (6).
 
 ---
 

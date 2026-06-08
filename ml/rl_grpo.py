@@ -198,8 +198,7 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
     """
     endpoint = base_url.rstrip("/") + "/rewards"
     # ngrok free tier serves a browser-warning interstitial (HTML) instead of the
-    # JSON response unless this header is present → resp.json() would fail. Harmless
-    # on cloudflared/other tunnels.
+    # JSON response unless this header is present → resp.json() would fail.
     headers = {"X-API-Key": api_key, "ngrok-skip-browser-warning": "true"}
 
     def reward_fn(prompts: list[str], completions: list[str], **kwargs) -> list[float]:
