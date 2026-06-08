@@ -26,10 +26,13 @@ import reward as _reward  # noqa: E402
 # Use Colab-run-specific state files, separate from the local rl_grpo_v2 run.
 _reward._PC_SET_PATH = _REPO_ROOT / "results" / "rl_pc_set_colab.json"
 _reward._MAX_PCS_SEEN_PATH = _REPO_ROOT / "results" / "rl_max_pcs_seen_colab.json"
+_reward._GLOBAL_FREQ_PATH = _REPO_ROOT / "results" / "rl_global_pc_freq_colab.json"
 _reward._pc_set = set()
 _reward._max_pcs_seen = 1
+_reward._global_pc_freq = {}
 _reward._load_pc_set()
 _reward._load_max_pcs_seen()
+_reward._load_global_freq()
 
 _API_KEY: str | None = os.environ.get("REWARD_API_KEY")
 if not _API_KEY:
@@ -52,6 +55,9 @@ class RewardResponse(BaseModel):
     total_pcs_per_program: list[int]
     max_pcs_seen: int
     verdict_counts: dict[str, int]
+    group_novelty_mean: float
+    global_novelty_mean: float
+    global_frontier: int
 
 
 @app.post("/rewards", response_model=RewardResponse)
@@ -70,4 +76,7 @@ def post_rewards(
         total_pcs_per_program=_reward._last_pcs_per_program,
         max_pcs_seen=_reward._max_pcs_seen,
         verdict_counts=dict(_reward._last_verdict_counts),
+        group_novelty_mean=_reward._last_group_novelty_mean,
+        global_novelty_mean=_reward._last_global_novelty_mean,
+        global_frontier=len(_reward._global_pc_freq),
     )

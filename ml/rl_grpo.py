@@ -224,6 +224,9 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
                 "verdict/error": vc.get("error", 0),
                 "verdict/crash": vc.get("crash", 0),
                 "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
+                "novelty/group_mean": rw._last_group_novelty_mean,
+                "novelty/global_mean": rw._last_global_novelty_mean,
+                "novelty/global_frontier": len(rw._global_pc_freq),
             }, commit=False)
 
         return rewards
@@ -271,6 +274,9 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
                 "verdict/error": vc.get("error", 0),
                 "verdict/crash": vc.get("crash", 0),
                 "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
+                "novelty/group_mean": data.get("group_novelty_mean", 0.0),
+                "novelty/global_mean": data.get("global_novelty_mean", 0.0),
+                "novelty/global_frontier": data.get("global_frontier", 0),
             }, commit=False)
 
         return rewards
