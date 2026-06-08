@@ -15,11 +15,12 @@ rejected programs.
 Data collection → SFT → RL (GRPO) → Coverage evaluation (unique PCs from valid programs)
 ```
 
-> **Single source of truth:** [`docs/PROJECT_HISTORY.md`](docs/PROJECT_HISTORY.md).
-> Canonical model names (SFT-v1/v2, RL-v1/v2) ↔ repo dirs: [`docs/NAMING.md`](docs/NAMING.md).
-> This README is a summary; where they differ, PROJECT_HISTORY wins.
+> **Docs are split by purpose** — this README is a summary; where they differ, these win:
+> [`docs/FACTS.md`](docs/FACTS.md) (what is true now: models, metrics, naming) ·
+> [`docs/JOURNAL.md`](docs/JOURNAL.md) (what happened, in order) ·
+> [`docs/DECISIONS.md`](docs/DECISIONS.md) (why) · [`docs/ops/`](docs/ops/) (how to run).
 
-### Current state (2026-06-04)
+### Current state (2026-06-08)
 
 | Phase | Status | What we learned |
 |---|---|---|
@@ -28,12 +29,12 @@ Data collection → SFT → RL (GRPO) → Coverage evaluation (unique PCs from v
 | RL-v1 (`rl_grpo_v2`) | ✅ negative result | 8,370 steps; reward had zero within-group variance → GRPO gradient starvation (`reward_std=0`, no learning). **Taught us: fix format + reward.** Not a failure — information. |
 | Reward + format redesign | ✅ | Stripped format; depth-based verdict-blind reward; remote (Colab) reward server |
 | SFT-v2 (`sft-1epoch-v2`, full 1-epoch) | ✅ | Generates real, **deep** programs. Weakness: **low diversity** — clusters; valid-coverage **saturates** (17.5× more valid programs → +12% unique PCs). (An earlier partial probe `sft_retrain`/cp1500 is the n=20 "19%" benchmark — same work, fewer steps.) |
-| RL-v2 (validity-gated novelty reward) | 🔬 ran, no breakthrough | Phase-A smoke + phase-B 200 steps: cleared the RL-v1 `std=0` trap but RL's valid programs sit *on* the SFT saturation curve. Under-trained + benchmarked out-of-regime. See [`docs/RL_V2.md`](docs/RL_V2.md). |
+| RL-v2 (validity-gated novelty reward) | 🔬 ran, no breakthrough | Phase-A smoke + phase-B 200 steps: cleared the RL-v1 `std=0` trap but RL's valid programs sit *on* the SFT saturation curve. Under-trained + benchmarked out-of-regime. See [`docs/JOURNAL.md`](docs/JOURNAL.md) (2026-06-08). |
 
 **On the old "60% pass-rate":** it was SFT-v1 measured through a clang gate whose parser bug
 deflated it; reconstructed honestly (pure encoder + KCOV) SFT-v1 is **73% valid**. But validity
 isn't the story — 73 valid programs reach only ~2,700 unique PCs. **Diversity, not validity, is
-the wall.** Full forensics: [`data/reconstruction/REPORT.md`](data/reconstruction/REPORT.md).
+the wall.** Full forensics: [`docs/JOURNAL.md`](docs/JOURNAL.md) (2026-06-04) + the seeded artifacts in `data/reconstruction/`.
 
 ---
 
@@ -56,9 +57,9 @@ a target status header.
 | Checkpoint | Steps | Eval loss | Accept-rate (honest) |
 |---|---|---|---|
 | `checkpoints/curated_3ep/` (SFT-v1) | 9,288 (3 ep) | 0.5571 | — |
-| `checkpoints/curated_merged/` (merged bf16) | — | — | **73%** valid via encoder+KCOV (the "60%" was clang-gate deflated — see `data/reconstruction/REPORT.md`) |
+| `checkpoints/curated_merged/` (merged bf16) | — | — | **73%** valid via encoder+KCOV (the "60%" was clang-gate deflated — see [`docs/FACTS.md`](docs/FACTS.md) §5) |
 
-See `docs/PROJECT_HISTORY.md` for the full, verified phase history.
+See [`docs/JOURNAL.md`](docs/JOURNAL.md) for the full, verified phase history.
 
 ### 3 — RL fine-tuning (GRPO)
 
@@ -67,56 +68,15 @@ The model generates BPF programs; each is validated on a live kernel VM instrume
 with KCOV (`KCOV_TRACE_PC`, flat uint64 PC array).
 
 **Key design: pure Python BPF encoder** — the model output (verifier-log assembly format)
-is encoded directly to raw BPF bytecode via `ml/reward.py:_encode_to_hex`, bypassing clang.
-This lets unusual instruction sequences reach the verifier instead of being rejected by
-the assembler.
+is encoded directly to raw BPF bytecode via `ml/reward.py:_encode_to_hex`, bypassing clang,
+so unusual instruction sequences reach the verifier instead of being rejected by the assembler
+(why: [`docs/DECISIONS.md`](docs/DECISIONS.md) D4).
 
-#### Initial reward design (run 1, `rl_grpo_v2`)
-
-| Tier | Condition | Value |
-|---|---|---|
-| New PCs | ACCEPTED + unseen kernel PCs | 1.0 |
-| Valid, no new PCs | ACCEPTED, PCs already known | 0.1 |
-| Verifier rejected | REJECTED | 0.1 |
-| Crash / timeout | SSH timeout | 2.0 |
-| Unparseable | ENCODE_FAIL | 0.0 |
-
-RL-v1 plateaued at 137 new PCs / 1638 total unique PCs (step ~1300, `reward_std=0`). Root cause discovered
-post-run: `kcov_validator` was discarding the KCOV trace for REJECTED programs (returning
-`PCs: []`), making all rejected programs look identical. With GRPO this causes
-`reward_std=0` within each group → zero gradient → no learning.
-
-#### Redesigned reward (depth-based, verdict-blind) — *RL-v1-era fix, later superseded*
-
-> This depth-based verdict-blind formula was the immediate fix after the RL-v1 `std=0` failure. The
-> actual **RL-v2** reward (the run that happened) is **validity-gated** — valid always beats invalid,
-> invalid gets a soft floor, valid adds novelty. See [`docs/RL_V2.md`](docs/RL_V2.md) §3. The formula
-> below is kept as the intermediate design.
-
-After fixing `kcov_validator` to return PCs for REJECTED programs:
-
-```
-depth_component = min(0.5, len(pcs) / max_pcs_seen * 0.5)
-discovery_bonus = 1.0  if any PC not in pre-batch snapshot
-reward          = depth_component + discovery_bonus
-
-Special cases:
-  encode_fail → 0.0   (no parseable instructions)
-  crash       → 2.0   (SSH timeout; VM may have crashed)
-```
-
-Verdict (ACCEPTED / REJECTED) does not affect the reward — only coverage depth does.
-This ensures reward variance within each GRPO group even when most programs are rejected.
-
-A pre-batch snapshot (`pc_set_snapshot = frozenset(_pc_set)`) is taken before the loop
-so all G completions compete against the same frontier regardless of evaluation order.
-
-#### Run history
-
-| Run | Config | Steps | Result |
-|---|---|---|---|
-| **RL-v1** (`rl_grpo_v2`) | beta=0.01, G=4, T=600, local GPU | 8370 | 137 progressively-new / 1,638 total unique PCs; plateau at ~1300, `reward_std=0` (gradient starvation + KCOV bug). **Negative result → drove the reward/format redesign.** |
-| **RL-v2** | **validity-gated** novelty reward (not verdict-blind) | ~200 (phase B) | **Ran** — no diversity breakthrough; RL valid programs sit on the SFT saturation curve. See [`docs/RL_V2.md`](docs/RL_V2.md). |
+The current RL-2 reward is a **validity-gated novelty ladder** (valid always beats invalid; invalid
+gets a soft floor for verifier-walk depth; valid adds per-group + global novelty) — the fix for the
+RL-1 `reward_std=0` gradient starvation. Full ladder + weights in [`docs/FACTS.md`](docs/FACTS.md) §4;
+the rationale and the superseded designs in [`docs/DECISIONS.md`](docs/DECISIONS.md) D5 and
+[`docs/JOURNAL.md`](docs/JOURNAL.md).
 
 ### 4 — Evaluation
 
@@ -145,7 +105,8 @@ fuzzing/                # Buzzer fork (modified ffi.go), VM scripts, Docker setu
 data/
   dataset_final_qwen.jsonl   # 27k curated SFT samples (bytecode_hex + verifier_log)
 docs/
-  training_log.md       # Full phase history and checkpoints
+  FACTS.md JOURNAL.md DECISIONS.md   # reference / history / rationale
+  ops/                  # how to run (ngrok, colab, pipelines)
   colab_restart_guide.md  # Colab Pro restart procedure
   ngrok_tunnel_setup.md   # Local reward server tunnel (ngrok static domain)
 tests/

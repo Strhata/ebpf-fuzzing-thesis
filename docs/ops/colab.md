@@ -1,4 +1,8 @@
-# Colab Pro — Restart Guide (grpo-depth-reward-v1, beta=0.01)
+# Colab Pro — Restart Guide
+
+> Procedure for resuming a dead Colab GRPO session. The run name, GPU, and beta below are examples —
+> the current RL-2 run uses an **A100** and the validity-gated reward (FACTS §4); set the Drive folder
+> / `OUTPUT_DIR` to your actual run.
 
 ---
 
@@ -40,8 +44,8 @@ Go to `colab.research.google.com` → open `train_grpo_colab.ipynb` from Drive.
 ### 2 — Connect to runtime
 Click **Connect** (top right). Wait for RAM/Disk bars to appear (~30s).
 
-If you get CPU only: Runtime > Change runtime type > T4 GPU > Save, then reconnect.
-Verify on first run whether Colab Pro assigns T4 automatically.
+If you get CPU only: Runtime > Change runtime type > A100 GPU > Save, then reconnect.
+(RL-2 needs the 40 GB A100 for G=16; a T4 will OOM.)
 
 ### 3 — Run all cells
 Runtime > **Run all** (or Ctrl+F9).
