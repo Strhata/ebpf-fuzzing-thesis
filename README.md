@@ -106,7 +106,7 @@ ml/        ★ training        train.py (SFT) · rl_grpo.py (GRPO) · reward.py 
                              reward) · enrich_dataset.py · *_colab.ipynb launchers
 tools/     ★ pipeline        kcov_validator/ (Go: BPF_PROG_LOAD+KCOV→JSON) · reward_server.py (FastAPI)
                              · benchmark.py · diversity_sample.py · coverage_race.py + plot
-                             (also one-off scripts — see FACTS §7 for which tools are core)
+                             (core vs one-off: tools/README.md)
 fuzzing/   ⚙ vendored        Google's buzzer (≈96 files, NOT our work) + our patch:
                              buzzer/pkg/units/ffi.go (data-collection dump). Plus VM/Docker scripts.
 thesis/    ★ deliverable     LaTeX chapters (ch1–ch7), main.pdf
