@@ -1,21 +1,36 @@
 """
-reward.py — RL reward function for GRPO training.
+reward.py — RL reward function for GRPO training (RL-v2: validity-gated, per-group novelty).
 
 Public interface:
     compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]
 
-Reward formula (verdict-blind, depth-based):
-    depth_component = min(0.5, len(pcs) / max_pcs_seen * 0.5)
-    discovery_bonus = 1.0 if any PC not in pre-batch global set snapshot
-    reward          = depth_component + discovery_bonus
+Reward ladder (per completion) — monotonic so valid always beats invalid:
+    encode fail / < floor insns   → 0.0
+    VM ERROR / whole-batch crash  → 0.0   (infra noise, NOT a reward — old code paid 2.0,
+                                            which made SSH flakiness the top reward)
+    REJECTED (invalid)            → soft floor: W_REJECT_MAX * min(1, len(pcs)/max_pcs_seen)
+                                    partial credit for how far the verifier walked before
+                                    rejecting. Keeps WITHIN-GROUP reward variance alive while
+                                    valid programs are rare (~7%) → avoids the RL-v1
+                                    reward_std=0 gradient starvation.
+    ACCEPTED (valid)              → W_VALID + W_NOVELTY * group_novelty(p)
 
-Special cases:
-    encode_fail  → 0.0  (no parseable instructions)
-    crash        → 2.0  (SSH timeout; VM may have crashed)
+group_novelty(p) = mean over p's PCs of (1 - freq/n_accepted), where freq = how many ACCEPTED
+programs in THIS batch hit that PC. A path every valid sibling walks pays 0; a path only p
+walks pays ~1. This is the per-group ("Option A") anti-clustering signal: stateless, computed
+within the batch, so it never starves as global coverage saturates. The global _pc_set is
+still tracked for telemetry (and as the seed for a future decayed-global "Option B" reward).
+
+Weights are read from env so the reward can be tuned where the server is launched
+(local WSL box), independent of the Colab training cell:
+    RL_W_VALID       (default 1.0)   flat bonus for crossing into ACCEPTED
+    RL_W_NOVELTY     (default 1.0)   weight on per-group novelty (ACCEPTED only)
+    RL_W_REJECT_MAX  (default 0.3)   ceiling on the invalid soft floor (< W_VALID by design)
 """
 
 import json
 import logging
+import os
 import re
 import struct
 import subprocess
@@ -37,10 +52,19 @@ logging.basicConfig(
 )
 _log = logging.getLogger("reward")
 
+# Reward weights (tunable via env at server launch; see module docstring).
+W_VALID: float = float(os.environ.get("RL_W_VALID", "1.0"))
+W_NOVELTY: float = float(os.environ.get("RL_W_NOVELTY", "1.0"))
+W_REJECT_MAX: float = float(os.environ.get("RL_W_REJECT_MAX", "0.3"))
+
 _pc_set: set[int] = set()
 _max_pcs_seen: int = 1
 _call_count: int = 0
 _last_pcs_per_program: list[int] = []  # populated by compute_rewards; read by reward_server
+# Verdict tally for the most recent batch — read by reward_server for telemetry.
+_last_verdict_counts: dict[str, int] = {
+    "accepted": 0, "rejected": 0, "encode_fail": 0, "error": 0, "crash": 0,
+}
 
 
 def _load_pc_set() -> None:
@@ -400,19 +424,19 @@ _MIN_INSTRUCTION_COUNT = 15
 
 
 def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
-    """Compute KCOV-based RL rewards for a batch of generated assembly programs.
+    """Compute validity-gated, per-group-novelty RL rewards for a batch.
 
-    Verdict-blind: REJECTED and ACCEPTED programs are both rewarded by depth.
-    Snapshot of _pc_set is taken before the batch so all completions compare
-    against the same frontier regardless of evaluation order within the batch.
+    See the module docstring for the full ladder. The batch IS one GRPO group
+    (rl_grpo uses a single fixed prompt with per_device_train_batch_size=1), so
+    group novelty is computed over the whole `completions` list.
     """
-    global _pc_set, _max_pcs_seen, _call_count, _last_pcs_per_program
+    global _pc_set, _max_pcs_seen, _call_count, _last_pcs_per_program, _last_verdict_counts
 
     n = len(completions)
     rewards: list[float] = [0.0] * n
     pcs_per_program: list[int] = [0] * n
+    counts = {"accepted": 0, "rejected": 0, "encode_fail": 0, "error": 0, "crash": 0}
     batch_id = _call_count
-    pc_set_snapshot = frozenset(_pc_set)
 
     # --- pass 1: encode + instruction floor; collect programs that need the VM ---
     to_validate: list[tuple[int, str]] = []   # (original index, hex)
@@ -424,54 +448,66 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
 
         if not hex_str:
             _log.debug("batch=%d i=%d ENCODE_FAIL preview=%r", batch_id, i, preview)
+            counts["encode_fail"] += 1
             continue  # reward stays 0.0
 
         insn_count = len(hex_str) // 16
         if insn_count < _MIN_INSTRUCTION_COUNT:
             _log.debug("batch=%d i=%d FLOOR insn_count=%d preview=%r",
                        batch_id, i, insn_count, preview)
+            counts["encode_fail"] += 1
             continue  # reward stays 0.0
 
         to_validate.append((i, hex_str))
 
-    # --- one batched VM call for everything that passed the filter ---
+    # --- one batched VM call; partition into accepted / rejected, accruing global state ---
+    accepted: list[tuple[int, set]] = []   # (orig index, distinct pcs)
+    rejected: list[tuple[int, set]] = []   # (orig index, distinct pcs)
     if to_validate:
         results = _validate_batch_on_vm([h for _, h in to_validate], ssh)
 
         if results is None:
-            # whole-batch SSH timeout / VM failure → crash reward for all, kick watchdog
+            # whole-batch SSH timeout / VM failure → infra noise, reward 0.0 (NOT 2.0).
             _log.debug("batch=%d BATCH_TIMEOUT n=%d", batch_id, len(to_validate))
             _watchdog(ssh)
-            for orig_i, _ in to_validate:
-                rewards[orig_i] = 2.0
+            counts["crash"] = len(to_validate)
         else:
-            # results[j] corresponds to to_validate[j] (validator preserves input order).
-            # Process in original order so _max_pcs_seen accrues exactly as the
-            # per-program path did (parity).
             for (orig_i, _hex), result in zip(to_validate, results):
                 verdict = result.get("verdict", "ERROR")
-                if verdict == "ERROR":
-                    _log.debug("batch=%d i=%d ERROR", batch_id, orig_i)
-                    continue  # reward stays 0.0
+                pcs = set(result.get("pcs", []))
+                _pc_set.update(pcs)
+                if len(pcs) > _max_pcs_seen:
+                    _max_pcs_seen = len(pcs)
+                if verdict == "ACCEPTED":
+                    accepted.append((orig_i, pcs))
+                elif verdict == "REJECTED":
+                    rejected.append((orig_i, pcs))
+                else:
+                    counts["error"] += 1  # reward stays 0.0
 
-                total_pcs = set(result.get("pcs", []))
-                new_pcs = total_pcs - pc_set_snapshot
-                _pc_set.update(total_pcs)
+    # --- soft floor for invalid programs: depth walked before rejection ---
+    for orig_i, pcs in rejected:
+        rewards[orig_i] = W_REJECT_MAX * min(1.0, len(pcs) / _max_pcs_seen)
+        pcs_per_program[orig_i] = len(pcs)
+    counts["rejected"] = len(rejected)
 
-                depth_component = min(0.5, len(total_pcs) / _max_pcs_seen * 0.5)
-                discovery_bonus = 1.0 if new_pcs else 0.0
-                r = depth_component + discovery_bonus
-
-                if len(total_pcs) > _max_pcs_seen:
-                    _max_pcs_seen = len(total_pcs)
-
-                _log.debug("batch=%d i=%d %s pcs=%d new=%d depth_r=%.3f reward=%.3f",
-                           batch_id, orig_i, verdict, len(total_pcs), len(new_pcs),
-                           depth_component, r)
-                rewards[orig_i] = r
-                pcs_per_program[orig_i] = len(total_pcs)
+    # --- per-group novelty for valid programs ---
+    n_acc = len(accepted)
+    counts["accepted"] = n_acc
+    if n_acc:
+        freq: dict[int, int] = {}
+        for _i, pcs in accepted:
+            for pc in pcs:
+                freq[pc] = freq.get(pc, 0) + 1
+        for orig_i, pcs in accepted:
+            novelty = (sum(1.0 - freq[pc] / n_acc for pc in pcs) / len(pcs)) if pcs else 0.0
+            rewards[orig_i] = W_VALID + W_NOVELTY * novelty
+            pcs_per_program[orig_i] = len(pcs)
+            _log.debug("batch=%d i=%d ACCEPTED pcs=%d novelty=%.3f reward=%.3f",
+                       batch_id, orig_i, len(pcs), novelty, rewards[orig_i])
 
     _last_pcs_per_program = pcs_per_program
+    _last_verdict_counts = counts
     _call_count += 1
     if _call_count % 100 == 0:
         save_pc_set()
