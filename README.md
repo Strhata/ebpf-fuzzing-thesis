@@ -20,6 +20,17 @@ Data collection → SFT → RL (GRPO) → Coverage evaluation (unique PCs from v
 > [`docs/JOURNAL.md`](docs/JOURNAL.md) (what happened, in order) ·
 > [`docs/DECISIONS.md`](docs/DECISIONS.md) (why) · [`docs/ops/`](docs/ops/) (how to run).
 
+### New here? Read in this order
+- **Understand the work** → this README, then [`docs/FACTS.md`](docs/FACTS.md) §1–2, then [`docs/JOURNAL.md`](docs/JOURNAL.md) top-to-bottom for the story.
+- **Run it** → [`docs/ops/running.md`](docs/ops/running.md).
+- **Examine the thesis** → [`thesis/main.pdf`](thesis/).
+
+**What is our contribution vs borrowed:** the actual work is `ml/`, the core of `tools/`
+(`kcov_validator`, `reward_server.py`, `reward.py`, `benchmark.py`, `diversity_sample.py`), the
+one-file buzzer patch `fuzzing/buzzer/pkg/units/ffi.go`, and `thesis/`. **Everything else under
+`fuzzing/buzzer/` (≈96 files) is Google's [buzzer](https://github.com/google/buzzer), vendored
+unchanged** — used only as a data generator, not part of the research contribution.
+
 ### Current state (2026-06-08)
 
 | Phase | Status | What we learned |
@@ -88,35 +99,25 @@ custom kernel 6.8 + KCOV + KASAN.
 
 ## Repository structure
 
+The full file-map is in [`docs/FACTS.md`](docs/FACTS.md) §7. The shape:
+
 ```
-ml/
-  train.py              # SFT training (QLoRA)
-  rl_grpo.py            # GRPO RL training + SanityCheckCallback
-  reward.py             # Reward function: BPF encoder + depth-based KCOV reward
-  train_grpo_colab.ipynb  # Colab launcher notebook (auto-resume, remote reward)
-  requirements_colab.txt  # Colab-side pip deps (no torch — pre-installed on Colab)
-tools/
-  kcov_validator/       # Go binary: loads BPF program, returns KCOV PC set as JSON
-  reward_server.py      # FastAPI server: exposes reward.py over HTTP with API key auth
-  evaluate_passrate.py  # SFT pass-rate evaluation (clang + ebpf_validator)
-  analyze_rl_run.py     # Parse grpo_completions.log → tier CSVs + plots
-  vm_watchdog.sh        # Restarts VM if SSH times out during training
-fuzzing/                # Buzzer fork (modified ffi.go), VM scripts, Docker setup
-data/
-  dataset_final_qwen.jsonl   # 27k curated SFT samples (bytecode_hex + verifier_log)
-docs/
-  FACTS.md JOURNAL.md DECISIONS.md   # reference / history / rationale
-  ops/                  # how to run (ngrok, colab, pipelines)
-  colab_restart_guide.md  # Colab Pro restart procedure
-  ngrok_tunnel_setup.md   # Local reward server tunnel (ngrok static domain)
-tests/
-  test_reward.py            # Depth-based reward + PC set persistence tests
-  test_reward_encoder.py    # 36 unit tests for the BPF encoder
-  test_reward_server.py     # FastAPI reward server tests
-  test_sanity_callback.py   # 11 unit tests for the training health monitor
-checkpoints/            # Model adapters — large files on HuggingFace (see below)
-results/                # Pass-rate CSVs, reward logs, PC set, analysis plots
+ml/        ★ training        train.py (SFT) · rl_grpo.py (GRPO) · reward.py (encoder + validity-gated
+                             reward) · enrich_dataset.py · *_colab.ipynb launchers
+tools/     ★ pipeline        kcov_validator/ (Go: BPF_PROG_LOAD+KCOV→JSON) · reward_server.py (FastAPI)
+                             · benchmark.py · diversity_sample.py · coverage_race.py + plot
+                             (also one-off scripts — see FACTS §7 for which tools are core)
+fuzzing/   ⚙ vendored        Google's buzzer (≈96 files, NOT our work) + our patch:
+                             buzzer/pkg/units/ffi.go (data-collection dump). Plus VM/Docker scripts.
+thesis/    ★ deliverable     LaTeX chapters (ch1–ch7), main.pdf
+docs/      ★ start here      FACTS.md (now) · JOURNAL.md (history) · DECISIONS.md (why) · ops/ (how-to)
+tests/       216 tests       pixi run pytest   (test_reward 32 · _encoder 50 · _server 6 · …)
+data/        dataset_final_qwen.jsonl (27k) + enriched + reconstruction artifacts
+benchmarks/  diversity/*.json (the saturation-curve results) + runs/ reports
+checkpoints/ adapters (off-git; on HuggingFace) · results/ (CSVs, plots; off-git)
 ```
+
+★ = our contribution · ⚙ = vendored dependency.
 
 ---
 
