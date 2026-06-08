@@ -176,6 +176,21 @@ class SanityCheckCallback(TrainerCallback):
         return counts
 
 
+# Reward telemetry buffer. The reward_fn runs inside compute_loss; logging from there with
+# wandb.log(commit=False) gets dropped by wandb's step counter, so custom metrics (novelty/*,
+# valid_rate, verdict/*) silently never chart. Instead the reward_fn stashes them here and the
+# callback below flushes them at on_log with the Trainer's explicit global_step.
+_REWARD_TELEMETRY: dict = {}
+
+
+class RewardTelemetryCallback(TrainerCallback):
+    """Flush the latest reward telemetry into wandb at the Trainer's logging step."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if wandb.run is not None and _REWARD_TELEMETRY:
+            wandb.log(dict(_REWARD_TELEMETRY), step=state.global_step)
+
+
 def _make_remote_reward_fn(base_url: str, api_key: str):
     """Return a reward function that calls the remote reward server over HTTP.
 
@@ -208,26 +223,28 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
 
         rewards: list[float] = data["rewards"]
 
-        if wandb.run is not None:
-            total_pcs = data.get("total_pcs_per_program", [])
-            vc = data.get("verdict_counts", {})
-            wandb.log({
-                "reward/mean": sum(rewards) / max(1, len(rewards)),
-                "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
-                "reward/max": max(rewards) if rewards else 0.0,
-                "cumulative_pcs": data.get("cumulative_pcs", 0),
-                "depth/mean": sum(total_pcs) / max(1, len(total_pcs)),
-                "depth/max": data.get("max_pcs_seen", 0),
-                "verdict/accepted": vc.get("accepted", 0),
-                "verdict/rejected": vc.get("rejected", 0),
-                "verdict/encode_fail": vc.get("encode_fail", 0),
-                "verdict/error": vc.get("error", 0),
-                "verdict/crash": vc.get("crash", 0),
-                "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
-                "novelty/group_mean": rw._last_group_novelty_mean,
-                "novelty/global_mean": rw._last_global_novelty_mean,
-                "novelty/global_frontier": len(rw._global_pc_freq),
-            }, commit=False)
+        # Read everything from the SERVER response `data` — the local rw module is empty on
+        # Colab (the server runs compute_rewards), so rw._last_* / rw._global_pc_freq are 0 here.
+        total_pcs = data.get("total_pcs_per_program", [])
+        vc = data.get("verdict_counts", {})
+        _REWARD_TELEMETRY.clear()
+        _REWARD_TELEMETRY.update({
+            "reward/mean": sum(rewards) / max(1, len(rewards)),
+            "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
+            "reward/max": max(rewards) if rewards else 0.0,
+            "cumulative_pcs": data.get("cumulative_pcs", 0),
+            "depth/mean": sum(total_pcs) / max(1, len(total_pcs)),
+            "depth/max": data.get("max_pcs_seen", 0),
+            "verdict/accepted": vc.get("accepted", 0),
+            "verdict/rejected": vc.get("rejected", 0),
+            "verdict/encode_fail": vc.get("encode_fail", 0),
+            "verdict/error": vc.get("error", 0),
+            "verdict/crash": vc.get("crash", 0),
+            "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
+            "novelty/group_mean": data.get("group_novelty_mean", 0.0),
+            "novelty/global_mean": data.get("global_novelty_mean", 0.0),
+            "novelty/global_frontier": data.get("global_frontier", 0),
+        })
 
         return rewards
 
@@ -258,26 +275,26 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
 
         rewards = rw.compute_rewards(completions, ssh)
 
-        if wandb.run is not None:
-            pcs = rw._last_pcs_per_program
-            vc = rw._last_verdict_counts
-            wandb.log({
-                "reward/mean": sum(rewards) / len(rewards),
-                "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
-                "reward/max": max(rewards),
-                "cumulative_pcs": len(rw._pc_set),
-                "depth/mean": sum(pcs) / max(1, len(pcs)),
-                "depth/max": rw._max_pcs_seen,
-                "verdict/accepted": vc.get("accepted", 0),
-                "verdict/rejected": vc.get("rejected", 0),
-                "verdict/encode_fail": vc.get("encode_fail", 0),
-                "verdict/error": vc.get("error", 0),
-                "verdict/crash": vc.get("crash", 0),
-                "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
-                "novelty/group_mean": data.get("group_novelty_mean", 0.0),
-                "novelty/global_mean": data.get("global_novelty_mean", 0.0),
-                "novelty/global_frontier": data.get("global_frontier", 0),
-            }, commit=False)
+        pcs = rw._last_pcs_per_program
+        vc = rw._last_verdict_counts
+        _REWARD_TELEMETRY.clear()
+        _REWARD_TELEMETRY.update({
+            "reward/mean": sum(rewards) / len(rewards),
+            "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
+            "reward/max": max(rewards),
+            "cumulative_pcs": len(rw._pc_set),
+            "depth/mean": sum(pcs) / max(1, len(pcs)),
+            "depth/max": rw._max_pcs_seen,
+            "verdict/accepted": vc.get("accepted", 0),
+            "verdict/rejected": vc.get("rejected", 0),
+            "verdict/encode_fail": vc.get("encode_fail", 0),
+            "verdict/error": vc.get("error", 0),
+            "verdict/crash": vc.get("crash", 0),
+            "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
+            "novelty/group_mean": rw._last_group_novelty_mean,
+            "novelty/global_mean": rw._last_global_novelty_mean,
+            "novelty/global_frontier": len(rw._global_pc_freq),
+        })
 
         return rewards
 
@@ -431,6 +448,8 @@ def main():
         reward_fn = _make_reward_fn(ssh, smoke_test=args.smoke_test)
 
     callbacks = []
+    if not args.smoke_test:
+        callbacks.append(RewardTelemetryCallback())   # flush reward metrics at the Trainer's step
     if not args.smoke_test and not remote and args.sanity_interval > 0:
         callbacks.append(SanityCheckCallback(ssh, interval_secs=args.sanity_interval))
         print(f"[*] Sanity check every {args.sanity_interval}s → results/sanity_checks.log")
