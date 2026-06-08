@@ -102,3 +102,21 @@ Forensic audit of every doc against git provenance (true-then/false-now). Fixed 
 contradictions (RL-2 status, reward semantics, the SFT-2 naming collision, the `avg_pcs` units error).
 Then restructured docs into this model: always-current `FACTS.md`, append-only `JOURNAL.md`,
 `DECISIONS.md`, `ops/` — retiring the chronological-sediment docs that needed "superseded" banners.
+
+## 2026-06-08 — RL-2 reading corrected *(clarifies the RL-2 phase-B entry above)*
+The earlier RL-2 entry called the phase-B null "evidence for the thesis (diversity is the wall)." That
+**overclaims** and is withdrawn. Corrected reading, from WandB run `bz5ymfzl` (phase-B, 207 steps):
+the run is ~40× shorter than RL-1's 8,370 steps; `reward/std` stayed > 0 (0.41 → 0.024 — the RL-1
+starvation did **not** recur) and `cumulative_pcs` rose 4320 → 4836 but **decelerating** (last ~50
+steps +31). That is *too short to tell* whether coverage would plateau or break through. The
+valid-unique metric (3606) sits on the SFT-2 saturation curve, but **the saturation/mode-collapse wall
+is an SFT-2 property** (measured on SFT-2 generations); whether KCOV-reward RL can exceed it is **open
+(RQ2)**, not closed. RL-2 neither confirms nor refutes that the wall is unbreakable. Note also that
+`cumulative_pcs=4836` is *total* PCs (includes invalid programs' verifier-walk PCs via the soft floor)
+— distinct from the valid-unique metric that counts.
+
+## 2026-06-08 — thesis-revision plan drafted (grill → PRD → issues)
+Ran grill-me → to-prd → to-issues on the thesis rewrite. Artifacts in gitignored
+`.scratch/thesis-revision/` (`PRD.md`, `issues-draft.md`): 10 vertical slices in 3 milestones
+(Evidence → Narrative → Propagation), critical path 04→05→06→07. F1 depth-collapse figure +
+`tools/figures_lib.py` landed first (commit `752a509`).

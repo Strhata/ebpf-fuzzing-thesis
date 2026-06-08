@@ -117,7 +117,26 @@ LoRA r=16/α=32 on q/k/v/o. (Why these: DECISIONS.)
 | distinct PCs / valid program | 2,337 | 2,428 | — |
 | novelty_score | 0.752 | 0.758 | 0.749 |
 
-→ **17.5× more valid programs → +12 % unique PCs.** RL-2 lands on the same curve. Diversity is the wall.
+→ **17.5× more valid programs → +12 % unique PCs.** The saturation is an **SFT-2 property** (measured on
+SFT-2 generations). RL-2's cp200 valid-unique (3,606) also sits on this curve — but whether KCOV-reward
+RL can *exceed* the SFT-2 ceiling is **open (RQ2)**, not closed (the 200-step run is ~40× shorter than
+RL-1; see JOURNAL 2026-06-08). The demonstrated finding is the SFT-2 wall; the RL question is unfinished.
+
+**Program length is narrow and pinned by the token budget** (canonical bytecode count `len(hex)//16`,
+from `benchmarks/diversity/candidates/`; figure `thesis/figures/depth_collapse.*`, script
+`tools/plot_depth_collapse.py`):
+
+| budget | n | mean | sd | median | IQR | range |
+|---|---:|---:|---:|---:|---:|---:|
+| 512 tok | 1,000 | 30.2 | 3.5 | 30 | 28–33 | 17–41 |
+| 1024 tok | 20,000 | 57.6 | 8.6 | 58 | 52–64 | 24–99 |
+
+The median just scales with the budget (30→58); the model does not vary program length. *(The earlier
+"929/1000 in one band" was an assembly-line-count artifact — canonical counting gives 58 % in the modal
+bin, 99 % within 20–39. Do not use the 929 figure.)*
+
+> RL-2 `cumulative_pcs`=4,836 (WandB `bz5ymfzl`, step 207) is **total** PCs incl. invalid programs'
+> verifier-walk PCs (soft floor) — **not** the valid-unique metric (3,606). Don't conflate the two.
 
 **Diagnostic-only (do not headline):** SFT-1 accept rate is ~73 % via pure-encoder+KCOV (the legacy
 "60 %" was a clang-parser artefact). This number is *meaningless as a success measure* — SFT-1's valid

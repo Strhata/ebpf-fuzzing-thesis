@@ -73,3 +73,16 @@ the 27k curated set and starving rare-but-informative classes.
 ### D12 — Do not rename checkpoint directories
 Directory names grew organically and are off-by-one (`rl_grpo_v2` = RL run 1). They are wired into
 tools, WandB resume files, and `benchmarks/`. Use the canonical↔dir map in FACTS §2; never rename.
+
+### D13 — Novelty is anchored on the literature gap, not on buzzer's internals *(supersedes D2)*
+D2 rested the novelty claim on "buzzer (and prior eBPF fuzzers) use KCOV only to display metrics,
+never to guide generation." A later source scan confirms buzzer ships a `coverage_based` mode; the
+precise internal behaviour of that mode is someone else's code, and we do not want the thesis's
+novelty to depend on a contestable assertion about it. **We retract that comparative claim.** The
+defensible and sufficient novelty is the *literature gap*: we found no published work that fine-tunes
+an LLM to generate eBPF programs for verifier fuzzing — the LLM-fuzzing literature targets JS engines,
+C, and syscall specs, not BPF bytecode, and coverage-as-RL-reward over an LLM eBPF generator is
+unattested. Buzzer's role here is **inspiration + training-data source**, stated factually. The
+KCOV-reward-guided GRPO loop remains the system contribution; it is novel by the literature gap,
+independent of any claim about buzzer. *(D2's "novel contribution = KCOV as the reward signal" intent
+survives; only its buzzer-deficiency rationale is withdrawn.)*
