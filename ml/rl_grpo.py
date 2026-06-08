@@ -21,6 +21,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from statistics import pstdev
 
 _REPO_ROOT_GRPO = Path(__file__).parent.parent
 _GRPO_DEBUG_LOG = _REPO_ROOT_GRPO / "results" / "grpo_completions.log"
@@ -209,15 +210,20 @@ def _make_remote_reward_fn(base_url: str, api_key: str):
 
         if wandb.run is not None:
             total_pcs = data.get("total_pcs_per_program", [])
+            vc = data.get("verdict_counts", {})
             wandb.log({
                 "reward/mean": sum(rewards) / max(1, len(rewards)),
+                "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
                 "reward/max": max(rewards) if rewards else 0.0,
                 "cumulative_pcs": data.get("cumulative_pcs", 0),
                 "depth/mean": sum(total_pcs) / max(1, len(total_pcs)),
                 "depth/max": data.get("max_pcs_seen", 0),
-                "tier/encode_fail": sum(1 for r in rewards if r == 0.0),
-                "tier/crash": sum(1 for r in rewards if r == 2.0),
-                "tier/new_pcs": sum(1 for r in rewards if r > 1.0),
+                "verdict/accepted": vc.get("accepted", 0),
+                "verdict/rejected": vc.get("rejected", 0),
+                "verdict/encode_fail": vc.get("encode_fail", 0),
+                "verdict/error": vc.get("error", 0),
+                "verdict/crash": vc.get("crash", 0),
+                "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
             }, commit=False)
 
         return rewards
@@ -251,15 +257,20 @@ def _make_reward_fn(ssh: rw.SSHClient, smoke_test: bool):
 
         if wandb.run is not None:
             pcs = rw._last_pcs_per_program
+            vc = rw._last_verdict_counts
             wandb.log({
                 "reward/mean": sum(rewards) / len(rewards),
+                "reward/std": pstdev(rewards) if len(rewards) > 1 else 0.0,
                 "reward/max": max(rewards),
                 "cumulative_pcs": len(rw._pc_set),
                 "depth/mean": sum(pcs) / max(1, len(pcs)),
                 "depth/max": rw._max_pcs_seen,
-                "tier/encode_fail": sum(1 for r in rewards if r == 0.0),
-                "tier/crash": sum(1 for r in rewards if r == 2.0),
-                "tier/new_pcs": sum(1 for r in rewards if r > 1.0),
+                "verdict/accepted": vc.get("accepted", 0),
+                "verdict/rejected": vc.get("rejected", 0),
+                "verdict/encode_fail": vc.get("encode_fail", 0),
+                "verdict/error": vc.get("error", 0),
+                "verdict/crash": vc.get("crash", 0),
+                "valid_rate": vc.get("accepted", 0) / max(1, len(rewards)),
             }, commit=False)
 
         return rewards
@@ -290,13 +301,15 @@ def main():
     ap.add_argument("--vm-host", default="localhost")
     ap.add_argument("--vm-port", type=int, default=10022)
     ap.add_argument("--vm-key", default=str(Path.home() / "fuzzing_lab" / "trixie.id_rsa"))
-    ap.add_argument("--num-generations", type=int, default=4,
-                    help="G: completions per prompt per step (G=4 fits 8GB VRAM at 768 tokens)")
-    ap.add_argument("--max-completion-length", type=int, default=2048,
-                    help="Hard token budget for generated completions. "
-                         "In practice generation stops early: the SFT model emits "
-                         "eos_token after 'exit', so mean completion length tracks "
-                         "the actual program size rather than the budget.")
+    ap.add_argument("--num-generations", type=int, default=16,
+                    help="G: completions per prompt per step (= GRPO group size). Target 16: "
+                         "at ~7%% valid that is ~1.3 valid programs/group so the per-group "
+                         "novelty signal exists; drop only if it OOMs the 40GB A100.")
+    ap.add_argument("--max-completion-length", type=int, default=512,
+                    help="Token budget per completion. 512 justified empirically: SFT-v2 "
+                         "diversity run showed 512->1024 raised avg_insn 30->58 but unique PCs "
+                         "only +12%% — length is not the diversity lever, so spend the saved "
+                         "memory on larger G instead.")
     ap.add_argument("--max-steps", type=int, default=-1,
                     help="Stop after this many steps (-1 = run until end of dataset)")
     ap.add_argument("--beta", type=float, default=0.05,

@@ -51,6 +51,7 @@ class RewardResponse(BaseModel):
     cumulative_pcs: int
     total_pcs_per_program: list[int]
     max_pcs_seen: int
+    verdict_counts: dict[str, int]
 
 
 @app.post("/rewards", response_model=RewardResponse)
@@ -68,4 +69,5 @@ def post_rewards(
         cumulative_pcs=len(_reward._pc_set),
         total_pcs_per_program=_reward._last_pcs_per_program,
         max_pcs_seen=_reward._max_pcs_seen,
+        verdict_counts=dict(_reward._last_verdict_counts),
     )
