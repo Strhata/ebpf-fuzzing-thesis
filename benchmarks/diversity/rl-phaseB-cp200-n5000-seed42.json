@@ -1,0 +1,40 @@
+{
+  "generated_utc": "2026-06-08T10:01:55.329184+00:00",
+  "candidates": "benchmarks/diversity/candidates/rl-phaseB-cp200-n5000-seed42.jsonl",
+  "meta": {
+    "model": "/content/drive/MyDrive/models/sft_v2_merged + adapter:/content/drive/MyDrive/grpo-rlv2-phaseB-global/checkpoint-200",
+    "n": 5000,
+    "seed": 42,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "max_new_tokens": 1024,
+    "batch_size": 800,
+    "prompt": "[coverage=high][novelty=high]\n### ASSEMBLY:\n",
+    "generated_utc": "2026-06-08T09:56:47.698654+00:00",
+    "gen_seconds": 660.8,
+    "total_new_tokens": 5120000,
+    "tokens_per_sec": 7748.327595024836,
+    "peak_run_gpu_mb": 33059.90912
+  },
+  "n": 5000,
+  "validate_wall_seconds": 131.6,
+  "kpis": {
+    "pass_rate": 0.0866,
+    "encode_rate": 1.0,
+    "avg_pcs": 190031.9468822171,
+    "max_pcs": 262143,
+    "total_unique_pcs": 4899,
+    "novelty_score": 0.7487471728924395,
+    "avg_insn_count": 59.1716,
+    "avg_opcode_diversity": 0.5319977878783437,
+    "avg_jump_count": 7.3196,
+    "tokens_per_sec": 7748.327595024836,
+    "peak_load_gpu_mb": 0.0,
+    "peak_run_gpu_mb": 33059.90912
+  },
+  "valid_only": {
+    "n_accepted": 433,
+    "valid_unique_pcs": 3606,
+    "avg_distinct_pcs_per_valid": 2426.152424942263
+  }
+}

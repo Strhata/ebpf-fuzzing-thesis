@@ -4,7 +4,8 @@ Canonical, version-controlled record of the RL-v2 experiment: training the SFT-v
 with GRPO under a **validity-gated, novelty-shaped** reward so that valid eBPF programs exercise
 *many distinct* verifier paths, not the same cluster.
 
-- **Status:** design + smoke result settled (2026-06-08); phase-B results pending (§5.2).
+- **Status:** design settled; phase-A smoke + phase-B 200-step preliminary both in (§5). Open:
+  in-regime (512/temp0.9) tiebreaker re-benchmark, and a longer phase-B run.
 - **Code:** `ml/reward.py`, `tools/reward_server.py`, `ml/rl_grpo.py`, `tests/test_reward.py`,
   `ml/train_grpo_colab.ipynb`. Commits `396c7e0` (phase A), `8e1a9a3` (phase B), `9e77638` (notebook).
 - **Spine:** verifier bugs are found by *valid* programs covering *many distinct* KCOV PCs.
@@ -177,23 +178,55 @@ The loop turns and the RL-v1 trap is cleared:
 The soft floor produced within-group variance as designed; the small group-novelty figure (0.05)
 confirms per-group novelty alone is a weak anti-clustering signal here — motivating phase B.
 
-### 5.2 Phase B — decayed-global novelty — *PENDING*
+### 5.2 Phase B — decayed-global novelty — 200-step preliminary (2026-06-08)
 
-> _Stub — fill when the phase-B run lands._ The verdict metric is **`novelty/global_frontier`**
-> (distinct KCOV PCs ever covered by valid programs): **climbing** = the global reward is forcing
-> the policy into new paths (clustering breaking); **plateauing** = clustering wins despite the
-> reward. Supporting: `novelty/global_mean` should start ~1.0 and decline as the archive fills.
->
-> To capture: `global_frontier` curve vs steps, final frontier vs the SFT-v2 baseline (3,862 valid
-> unique PCs), `valid_rate` stability, and the reward/KL/entropy traces.
+Trained ~200 GRPO steps with `RL_W_GLOBAL=2.0` (G=16, 512 tok, temp 0.9), saved
+`checkpoint-200`. Stopped early on Colab compute-unit exhaustion. The diversity benchmark was
+re-run on the RL model (`sft_v2_merged` + `checkpoint-200`), matched to the SFT-v2 n=20k baseline
+config (1024 tok, temp 1.0, top_p 0.95, seed 42):
+
+| | SFT-v2 n=1k | SFT-v2 n=20k | RL phase-B cp200 n=5k |
+|---|---:|---:|---:|
+| accept_rate | 7.5% | 6.6% | **8.7%** |
+| valid programs | 75 | 1,310 | **433** |
+| **valid_unique_pcs** | 3,462 | 3,862 | **3,606** |
+| novelty_score | 0.752 | 0.758 | **0.749** |
+
+**Verdict: no diversity breakthrough at 200 steps.** Placed on the SFT saturation curve by
+valid-program count — SFT (75 → 3,462) … (1,310 → 3,862) — RL's (433 → 3,606) lands *on the same
+curve* (linear-interp SFT at 433 valid ≈ 3,580; the concave true curve is a touch higher). Novelty
+is identical (0.749 vs 0.752). The RL model's valid programs cluster like SFT's. Validity nudged up
+(6.6% → 8.7%, ~30% rel) — the gate does something, but diversity did not move.
+
+**Two caveats before concluding (both real):**
+1. **Only 200 steps** — the policy barely shifted; the in-training `global_frontier` was still
+   climbing when stopped. This is the floor of the method, not its ceiling.
+2. **Benchmarked out of training regime.** RL trained at 512 tok / temp 0.9; the benchmark ran
+   1024 tok / temp 1.0 (to match the SFT baseline). Inference validity here (8.7%) is far below the
+   ~30–49% observed *during training* → the 1024/temp-1.0 benchmark may mask RL gains. The honest
+   tiebreaker is to re-benchmark BOTH models at 512 tok / temp 0.9 (RL's own regime).
+
+Artifacts: `benchmarks/diversity/rl-phaseB-cp200-n5000-seed42.json` (candidates gitignored).
 
 ---
 
 ## 6. Conclusion / next
 
-- **Validity is solved enough** (~27% under RL) — the open problem is diversity, exactly the spine.
-- **Phase A** proves the loop and clears the RL-v1 `std=0` trap but is a weak anti-clustering signal.
-- **Phase B** (running) is the real bet: penalise re-treading the run-wide cluster.
-- **If phase B plateaus**, escalate per the literature: raise `RL_W_GLOBAL`, enable
-  `RL_GLOBAL_DECAY < 1`, add an entropy bonus / clip-higher, or move to an explicit QD/MAP-Elites
-  archive over verifier-path niches.
+**Thesis-level conclusion (honest, defensible):** fine-tuning yields a generator of valid, deep
+verifier programs, but the binding constraint on learned verifier fuzzing is **path diversity, not
+validity** — shown by a hard saturation curve (17.5× more valid programs → +12% coverage). A
+validity-gated, novelty-shaped RL objective is the natural intervention; a first 200-step phase-B
+run did **not** break the saturation (RL valid programs sit on the SFT diversity curve). This
+*localizes* the open problem and leaves the metric + infrastructure to attack it. The RL null
+result is evidence *for* the thesis (diversity is the wall), not against the approach — it is
+under-trained (200 steps) and benchmarked out of regime.
+
+**Next, cheap → expensive:**
+- **Tiebreaker (no training):** re-benchmark SFT-v2 *and* RL at 512 tok / temp 0.9 (RL's regime).
+  Decides whether RL gains are real-but-regime-specific or absent.
+- **More steps:** 200 is far short of reshaping the policy; the in-training frontier was still
+  climbing. Needs compute beyond the current Colab budget.
+- **Stronger signal:** raise `RL_W_GLOBAL` (2→6), enable `RL_GLOBAL_DECAY < 1`, add an entropy
+  bonus / clip-higher, or move to an explicit QD/MAP-Elites archive over verifier-path niches.
+- **Throughput for longer runs:** bump G (16→32, the A100 was half-idle at 20/40GB) and/or
+  `use_vllm=True` (generation is the wall-clock bottleneck).
