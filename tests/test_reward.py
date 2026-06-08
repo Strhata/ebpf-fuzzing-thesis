@@ -28,6 +28,7 @@ def _fresh_reward(pc_set_path: str = "", max_pcs_seen_path: str = ""):
     spec.loader.exec_module(rw)
     rw._pc_set = set()       # isolate from results/rl_pc_set.json on disk
     rw._max_pcs_seen = 1     # isolate from results/rl_max_pcs_seen.json on disk
+    rw._global_pc_freq = {}  # isolate from results/rl_global_pc_freq.json on disk
     if pc_set_path:
         rw._PC_SET_PATH = Path(pc_set_path)
         rw._load_pc_set()
@@ -172,6 +173,76 @@ class TestRewardLadder(unittest.TestCase):
         self.assertGreater(rewards[0], rewards[1])
         self.assertAlmostEqual(rewards[1], rw.W_REJECT_MAX, places=6)  # capped invalid
         self.assertLess(rw.W_REJECT_MAX, rw.W_VALID)                   # gate holds by design
+
+    # --- phase B: decayed-global novelty ---
+
+    def test_global_term_off_by_default(self):
+        # W_GLOBAL defaults to 0 → reward is phase-A only (W_VALID for a lone valid).
+        rw = self._rw()
+        self.assertEqual(rw.W_GLOBAL, 0.0)
+        ssh = _mock_ssh("ACCEPTED", pcs=[1, 2, 3])
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rewards = rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertAlmostEqual(rewards[0], rw.W_VALID, places=6)
+
+    def test_global_novelty_decays_with_frequency(self):
+        # A PC seen many times globally must pay less than a brand-new PC.
+        rw = self._rw()
+        rw.W_GLOBAL = 2.0
+        rw.W_NOVELTY = 0.0                  # isolate the global term
+        rw._global_pc_freq = {99: 99.0}     # PC 99 hit 99× before; PC 7 unseen
+        specs = [("ACCEPTED", [7]), ("ACCEPTED", [99])]
+        ssh = _mock_ssh_multi(specs)
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
+        # fresh PC 7: 1/(1+0)=1 ; stale PC 99: 1/(1+99)=0.01
+        self.assertAlmostEqual(rewards[0], rw.W_VALID + 2.0 * 1.0, places=6)
+        self.assertAlmostEqual(rewards[1], rw.W_VALID + 2.0 * (1.0 / 100.0), places=6)
+        self.assertGreater(rewards[0], rewards[1])
+
+    def test_global_freq_accumulates_accepted_only(self):
+        rw = self._rw()
+        rw.W_GLOBAL = 1.0
+        specs = [("ACCEPTED", [1, 2]), ("REJECTED", [3, 4])]
+        ssh = _mock_ssh_multi(specs)
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
+        self.assertEqual(rw._global_pc_freq.get(1), 1.0)
+        self.assertEqual(rw._global_pc_freq.get(2), 1.0)
+        self.assertNotIn(3, rw._global_pc_freq)   # rejected PCs do NOT enter the frontier
+        self.assertNotIn(4, rw._global_pc_freq)
+
+    def test_global_freq_snapshot_within_batch(self):
+        # Two accepted programs hitting the same fresh PC both score against pre-batch freq=0.
+        rw = self._rw()
+        rw.W_GLOBAL = 2.0
+        ssh = _mock_ssh("ACCEPTED", pcs=[5000])
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rewards = rw.compute_rewards([_VALID_ASM, _VALID_ASM], ssh)
+        # both see freq=0 → global novelty 1.0 each; group novelty 0 (both hit it)
+        for r in rewards:
+            self.assertAlmostEqual(r, rw.W_VALID + 2.0 * 1.0, places=6)
+        self.assertEqual(rw._global_pc_freq.get(5000), 2.0)  # then incremented twice
+
+    def test_global_decay_ages_counts(self):
+        rw = self._rw()
+        rw.W_GLOBAL = 1.0
+        rw.GLOBAL_DECAY = 0.5
+        rw._global_pc_freq = {1: 10.0}
+        ssh = _mock_ssh("ACCEPTED", pcs=[2])
+        with patch.object(rw, "_encode_to_hex", return_value=_VALID_HEX):
+            rw.compute_rewards([_VALID_ASM], ssh)
+        self.assertEqual(rw._global_pc_freq.get(1), 5.0)   # aged 10 * 0.5
+        self.assertEqual(rw._global_pc_freq.get(2), 1.0)   # this batch's PC added after ageing
+
+    def test_global_freq_reloads_from_disk(self):
+        path = str(Path(self._tmpdir) / "gf.json")
+        with open(path, "w") as f:
+            json.dump({"123": 4.0}, f)
+        rw = _fresh_reward(self._pc_path, self._max_pcs_path)
+        rw._GLOBAL_FREQ_PATH = Path(path)
+        rw._load_global_freq()
+        self.assertEqual(rw._global_pc_freq.get(123), 4.0)
 
     # --- the RL-v1 guard: within-group reward variance ---
 

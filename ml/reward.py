@@ -13,19 +13,30 @@ Reward ladder (per completion) — monotonic so valid always beats invalid:
                                     rejecting. Keeps WITHIN-GROUP reward variance alive while
                                     valid programs are rare (~7%) → avoids the RL-v1
                                     reward_std=0 gradient starvation.
-    ACCEPTED (valid)              → W_VALID + W_NOVELTY * group_novelty(p)
+    ACCEPTED (valid)              → W_VALID
+                                    + W_NOVELTY * group_novelty(p)     [phase A]
+                                    + W_GLOBAL  * global_novelty(p)    [phase B, off by default]
 
 group_novelty(p) = mean over p's PCs of (1 - freq/n_accepted), where freq = how many ACCEPTED
 programs in THIS batch hit that PC. A path every valid sibling walks pays 0; a path only p
-walks pays ~1. This is the per-group ("Option A") anti-clustering signal: stateless, computed
-within the batch, so it never starves as global coverage saturates. The global _pc_set is
-still tracked for telemetry (and as the seed for a future decayed-global "Option B" reward).
+walks pays ~1. Per-group ("Option A"): stateless, never starves, but only fights crowding
+*within a batch* — weak against a model that re-treads the same global cluster every step.
+
+global_novelty(p) = mean over p's PCs of 1/(1 + global_freq[pc]), where global_freq is a
+persistent count of how many times each PC has been hit by an ACCEPTED program across the WHOLE
+run (snapshot pre-batch). A brand-new PC pays ~1.0; a PC hit 100× pays ~0.01. This is the
+decayed-global ("Option B") anti-clustering signal: re-treading the run-wide cluster stops
+paying, forcing the policy outward. The 1/(1+freq) decay means it *fades* rather than hard-zeros,
+avoiding the naive-archive reward collapse. Optional RL_GLOBAL_DECAY (<1) ages counts each batch
+so abandoned regions slowly become rewarding again.
 
 Weights are read from env so the reward can be tuned where the server is launched
 (local WSL box), independent of the Colab training cell:
     RL_W_VALID       (default 1.0)   flat bonus for crossing into ACCEPTED
-    RL_W_NOVELTY     (default 1.0)   weight on per-group novelty (ACCEPTED only)
+    RL_W_NOVELTY     (default 1.0)   weight on per-group novelty (phase A; ACCEPTED only)
+    RL_W_GLOBAL      (default 0.0)   weight on decayed-global novelty (phase B; set >0 to enable)
     RL_W_REJECT_MAX  (default 0.3)   ceiling on the invalid soft floor (< W_VALID by design)
+    RL_GLOBAL_DECAY  (default 1.0)   per-batch multiplicative ageing of global_freq (1.0 = off)
 """
 
 import json
@@ -40,6 +51,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).parent.parent
 _PC_SET_PATH = _REPO_ROOT / "results" / "rl_pc_set.json"
 _MAX_PCS_SEEN_PATH = _REPO_ROOT / "results" / "rl_max_pcs_seen.json"
+_GLOBAL_FREQ_PATH = _REPO_ROOT / "results" / "rl_global_pc_freq.json"
 _DEBUG_LOG = _REPO_ROOT / "results" / "reward_debug.log"
 
 # results/ is gitignored -> absent in a fresh clone (Colab). Create before the FileHandler opens.
@@ -55,16 +67,22 @@ _log = logging.getLogger("reward")
 # Reward weights (tunable via env at server launch; see module docstring).
 W_VALID: float = float(os.environ.get("RL_W_VALID", "1.0"))
 W_NOVELTY: float = float(os.environ.get("RL_W_NOVELTY", "1.0"))
+W_GLOBAL: float = float(os.environ.get("RL_W_GLOBAL", "0.0"))      # phase B; 0 = off
 W_REJECT_MAX: float = float(os.environ.get("RL_W_REJECT_MAX", "0.3"))
+GLOBAL_DECAY: float = float(os.environ.get("RL_GLOBAL_DECAY", "1.0"))
 
 _pc_set: set[int] = set()
 _max_pcs_seen: int = 1
+_global_pc_freq: dict[int, float] = {}   # phase-B state: PC → times hit by an ACCEPTED program
 _call_count: int = 0
 _last_pcs_per_program: list[int] = []  # populated by compute_rewards; read by reward_server
 # Verdict tally for the most recent batch — read by reward_server for telemetry.
 _last_verdict_counts: dict[str, int] = {
     "accepted": 0, "rejected": 0, "encode_fail": 0, "error": 0, "crash": 0,
 }
+# Mean novelty terms over the most recent batch's ACCEPTED programs (telemetry).
+_last_group_novelty_mean: float = 0.0
+_last_global_novelty_mean: float = 0.0
 
 
 def _load_pc_set() -> None:
@@ -93,8 +111,22 @@ def _save_max_pcs_seen() -> None:
         json.dump(_max_pcs_seen, f)
 
 
+def _load_global_freq() -> None:
+    global _global_pc_freq
+    if _GLOBAL_FREQ_PATH.exists():
+        with _GLOBAL_FREQ_PATH.open() as f:
+            _global_pc_freq = {int(k): float(v) for k, v in json.load(f).items()}
+
+
+def save_global_freq() -> None:
+    _GLOBAL_FREQ_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _GLOBAL_FREQ_PATH.open("w") as f:
+        json.dump({str(k): v for k, v in _global_pc_freq.items()}, f)
+
+
 _load_pc_set()
 _load_max_pcs_seen()
+_load_global_freq()
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +462,9 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
     (rl_grpo uses a single fixed prompt with per_device_train_batch_size=1), so
     group novelty is computed over the whole `completions` list.
     """
-    global _pc_set, _max_pcs_seen, _call_count, _last_pcs_per_program, _last_verdict_counts
+    global _pc_set, _max_pcs_seen, _global_pc_freq, _call_count
+    global _last_pcs_per_program, _last_verdict_counts
+    global _last_group_novelty_mean, _last_global_novelty_mean
 
     n = len(completions)
     rewards: list[float] = [0.0] * n
@@ -491,26 +525,46 @@ def compute_rewards(completions: list[str], ssh: SSHClient) -> list[float]:
         pcs_per_program[orig_i] = len(pcs)
     counts["rejected"] = len(rejected)
 
-    # --- per-group novelty for valid programs ---
+    # --- novelty for valid programs: per-group (A) + decayed-global (B) ---
     n_acc = len(accepted)
     counts["accepted"] = n_acc
+    group_nov_sum = 0.0
+    global_nov_sum = 0.0
     if n_acc:
+        # within-batch PC frequency for the per-group term
         freq: dict[int, int] = {}
         for _i, pcs in accepted:
             for pc in pcs:
                 freq[pc] = freq.get(pc, 0) + 1
+        # score against the PRE-batch global frontier so order within the batch doesn't matter
         for orig_i, pcs in accepted:
-            novelty = (sum(1.0 - freq[pc] / n_acc for pc in pcs) / len(pcs)) if pcs else 0.0
-            rewards[orig_i] = W_VALID + W_NOVELTY * novelty
+            if pcs:
+                group_nov = sum(1.0 - freq[pc] / n_acc for pc in pcs) / len(pcs)
+                global_nov = sum(1.0 / (1.0 + _global_pc_freq.get(pc, 0.0)) for pc in pcs) / len(pcs)
+            else:
+                group_nov = global_nov = 0.0
+            rewards[orig_i] = W_VALID + W_NOVELTY * group_nov + W_GLOBAL * global_nov
             pcs_per_program[orig_i] = len(pcs)
-            _log.debug("batch=%d i=%d ACCEPTED pcs=%d novelty=%.3f reward=%.3f",
-                       batch_id, orig_i, len(pcs), novelty, rewards[orig_i])
+            group_nov_sum += group_nov
+            global_nov_sum += global_nov
+            _log.debug("batch=%d i=%d ACCEPTED pcs=%d g_nov=%.3f gl_nov=%.3f reward=%.3f",
+                       batch_id, orig_i, len(pcs), group_nov, global_nov, rewards[orig_i])
+        # update the global frontier AFTER scoring (accepted programs only)
+        if GLOBAL_DECAY < 1.0:
+            for pc in list(_global_pc_freq):
+                _global_pc_freq[pc] *= GLOBAL_DECAY
+        for _i, pcs in accepted:
+            for pc in pcs:
+                _global_pc_freq[pc] = _global_pc_freq.get(pc, 0.0) + 1.0
 
     _last_pcs_per_program = pcs_per_program
     _last_verdict_counts = counts
+    _last_group_novelty_mean = group_nov_sum / n_acc if n_acc else 0.0
+    _last_global_novelty_mean = global_nov_sum / n_acc if n_acc else 0.0
     _call_count += 1
     if _call_count % 100 == 0:
         save_pc_set()
         _save_max_pcs_seen()
+        save_global_freq()
 
     return rewards
