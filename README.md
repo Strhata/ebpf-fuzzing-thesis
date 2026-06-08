@@ -27,8 +27,8 @@ Data collection → SFT → RL (GRPO) → Coverage evaluation (unique PCs from v
 | SFT-v1 (`curated_3ep`) | ✅ | Generates valid programs, but verifier-log format is ~232 tok/insn → only ~2 instructions fit the budget → too trivial to explore |
 | RL-v1 (`rl_grpo_v2`) | ✅ negative result | 8,370 steps; reward had zero within-group variance → GRPO gradient starvation (`reward_std=0`, no learning). **Taught us: fix format + reward.** Not a failure — information. |
 | Reward + format redesign | ✅ | Stripped format; depth-based verdict-blind reward; remote (Colab) reward server |
-| SFT-v2 (`sft_retrain`) | ✅ | Generates real, **deep** programs (high PCs/program). Weakness: **low diversity** — clusters, coverage saturates |
-| RL-v2 (`rl_grpo_v3`) | 🔬 the bet | Verdict-blind depth+novelty reward to break clustering. **Not yet run — open question, may not succeed.** |
+| SFT-v2 (`sft-1epoch-v2`, full 1-epoch) | ✅ | Generates real, **deep** programs. Weakness: **low diversity** — clusters; valid-coverage **saturates** (17.5× more valid programs → +12% unique PCs). (An earlier partial probe `sft_retrain`/cp1500 is the n=20 "19%" benchmark — same work, fewer steps.) |
+| RL-v2 (validity-gated novelty reward) | 🔬 ran, no breakthrough | Phase-A smoke + phase-B 200 steps: cleared the RL-v1 `std=0` trap but RL's valid programs sit *on* the SFT saturation curve. Under-trained + benchmarked out-of-regime. See [`docs/RL_V2.md`](docs/RL_V2.md). |
 
 **On the old "60% pass-rate":** it was SFT-v1 measured through a clang gate whose parser bug
 deflated it; reconstructed honestly (pure encoder + KCOV) SFT-v1 is **73% valid**. But validity
@@ -86,7 +86,12 @@ post-run: `kcov_validator` was discarding the KCOV trace for REJECTED programs (
 `PCs: []`), making all rejected programs look identical. With GRPO this causes
 `reward_std=0` within each group → zero gradient → no learning.
 
-#### Redesigned reward (depth-based, verdict-blind)
+#### Redesigned reward (depth-based, verdict-blind) — *RL-v1-era fix, later superseded*
+
+> This depth-based verdict-blind formula was the immediate fix after the RL-v1 `std=0` failure. The
+> actual **RL-v2** reward (the run that happened) is **validity-gated** — valid always beats invalid,
+> invalid gets a soft floor, valid adds novelty. See [`docs/RL_V2.md`](docs/RL_V2.md) §3. The formula
+> below is kept as the intermediate design.
 
 After fixing `kcov_validator` to return PCs for REJECTED programs:
 
@@ -111,7 +116,7 @@ so all G completions compete against the same frontier regardless of evaluation 
 | Run | Config | Steps | Result |
 |---|---|---|---|
 | **RL-v1** (`rl_grpo_v2`) | beta=0.01, G=4, T=600, local GPU | 8370 | 137 progressively-new / 1,638 total unique PCs; plateau at ~1300, `reward_std=0` (gradient starvation + KCOV bug). **Negative result → drove the reward/format redesign.** |
-| **RL-v2** (`rl_grpo_v3`) | depth+novelty verdict-blind reward | — | **Not yet run** — the bet that RL breaks SFT-v2's clustering. Pipeline ready. |
+| **RL-v2** | **validity-gated** novelty reward (not verdict-blind) | ~200 (phase B) | **Ran** — no diversity breakthrough; RL valid programs sit on the SFT saturation curve. See [`docs/RL_V2.md`](docs/RL_V2.md). |
 
 ### 4 — Evaluation
 

@@ -1,5 +1,0 @@
-tunnel: <TUNNEL-UUID>
-credentials-file: /home/<YOUR-USER>/.cloudflared/<TUNNEL-UUID>.json
-
-ingress:
-  - service: http://localhost:8000

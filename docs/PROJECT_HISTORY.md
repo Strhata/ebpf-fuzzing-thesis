@@ -1,6 +1,12 @@
 # Project History — eBPF Fuzzing + LLM Thesis
-**Single source of truth.** Last updated: 2026-06-04.
+**Single source of truth for phases 0–10.** Last updated: 2026-06-08.
 **Verified against:** git log, training logs, benchmark run JSONs, `.scratch/fact-check/`, thesis chapters, memory.
+
+> **Superseded on two fronts by [`docs/RL_V2.md`](RL_V2.md) (2026-06-08):** the **full SFT-v2**
+> model (`sft-1epoch-v2`, the diversity-saturation base — *not* the partial `sft_retrain` probe) and
+> **RL-v2**, which has since **run** (phase-A smoke + phase-B 200 steps → no diversity breakthrough)
+> with a **validity-gated** reward (not the verdict-blind depth reward planned below). Where this
+> file and RL_V2.md differ on SFT-v2 / RL-v2, RL_V2.md wins. Canonical model↔dir map: [`NAMING.md`](NAMING.md).
 
 ---
 
@@ -30,13 +36,20 @@ negative space (what does *not* work, and why) is itself the result.
      arXiv:2605.07689). Compounded by a KCOV bug that returned empty PCs for rejected programs.
   → Conclusion: **format and reward must change.** Run 1 was information-gathering.
 
-- **Run 2 model (SFT-v2 `sft_retrain`) — fixes confirmed.** Stripped format → real, longer
-  programs. It generates valid programs that go **deep** (high PCs per program). Its remaining
-  weakness is **diversity**: it re-emits structurally similar programs, so cumulative coverage
-  **saturates** (e.g. coverage-race programs 89→270 added only +49 unique PCs).
+- **Run 2 model (SFT-v2) — fixes confirmed.** Stripped format → real, longer programs. It generates
+  valid programs that go **deep** (high PCs per program). Its remaining weakness is **diversity**: it
+  re-emits structurally similar programs, so cumulative coverage **saturates**. The canonical SFT-v2
+  is the **full one-epoch run** (`sft-1epoch-v2`, ~2,408 steps); the diversity benchmark shows 17.5×
+  more valid programs buy only +12% unique PCs (RL_V2.md §1). (An earlier **partial probe**,
+  `sft_retrain` checkpoint-1500 / 0.62 epoch, is the n=20 "19%" benchmark below — *not* the diversity
+  model; the two differ only in training steps.)
 
-- **The bet (RL-v2, `rl_grpo_v3`, not yet run):** a verdict-blind depth+novelty reward to break
-  the SFT clustering and push diversity. **Open question — may not succeed.**
+- **The bet (RL-v2, validity-gated novelty reward) — has run, no breakthrough yet.** A first phase-A
+  smoke + phase-B 200-step run (RL_V2.md §5) cleared the RL-v1 `std=0` trap (reward/std 0.31) but did
+  **not** break the saturation: RL's valid programs land *on* the SFT diversity curve. Under-trained
+  (200 steps) and benchmarked out-of-regime — the null localizes the open problem rather than closing
+  it. **Reward is validity-gated** (valid always beats invalid; invalid gets a soft floor), *not* the
+  verdict-blind depth reward originally planned (see Phase 5 / §3.4 for the superseded design).
 
 **Diversity, not validity, is the wall.** The reconstruction (§Phase 10) confirms it: SFT-v1 is
 73% valid yet 73 valid programs reach only ~2,700 unique PCs — coverage barely moves with
@@ -199,10 +212,14 @@ Key benchmark results (n=20, sft_retrain_cp1500 vs curated_3ep_cp6000):
 
 | Model | Strategy | Prompt | pass_rate | avg_pcs |
 |---|---|---|---|---|
-| sft_retrain_cp1500 | merged_fp16 | `[coverage=high][novelty=high]` | ~15–20% | ~254k |
-| sft_retrain_cp1500 | merged_fp16 | neutral | ~0–5% | ~180k |
+| sft_retrain_cp1500 | merged_fp16 | `[coverage=high][novelty=high]` | ~15–20% | ~254k* |
+| sft_retrain_cp1500 | merged_fp16 | neutral | ~0–5% | ~180k* |
 | sft_retrain_cp1500 | merged_bnb4bit | any | 0% | 0 |
 | curated_3ep_cp6000 | merged_fp16 | `Status: VALID` | 0% (ERROR) | 0 |
+
+> *`avg_pcs` (the "~254k") is the **raw KCOV trace length** — every PC hit, loops included — **not**
+> coverage. The coverage figure (the spine metric) is ~2,400 *distinct* PCs/valid program and 3,8xx
+> valid-unique PCs over a run (RL_V2.md §1). Do not cite avg_pcs as a coverage achievement.
 
 - **`merged_fp16` clear winner.** `merged_bnb4bit` destroys quality post-merge.
 - `[coverage=high][novelty=high]` prefix is load-bearing (model trained on it).
@@ -319,7 +336,9 @@ Script: `ml/enrich_dataset.py`.
 - Runs each bytecode through kcov_validator → PC set.
 - Computes `novelty_score` per program: fraction of its PCs not seen in any other program (uses `set(p.validation.pcs)` for per-program counting — earlier bug used total occurrences, giving negative scores).
 - Assigns `novelty_bin` via tertile thresholds: `low` / `medium` / `high`.
-- Output: `data/dataset_enriched.jsonl`.
+- Output: `data/dataset_final_qwen_enriched.jsonl` (the SFT-v2 training file; an earlier variant
+  `data/corpus_ml_enriched.jsonl` also exists). *(Earlier drafts of this doc named a
+  `dataset_enriched.jsonl` that was never written.)*
 
 ---
 
@@ -480,7 +499,7 @@ All HIGH/MEDIUM items from `.scratch/fact-check/general-knowledge-fact-check.md`
 |---|---|
 | `ml/train.py` | SFT training (QLoRA, `EncoderPassRateCallback`) |
 | `ml/rl_grpo.py` | GRPO RL training, SSH reward bridge, remote reward URL |
-| `ml/reward.py` | `_encode_to_hex()`, `compute_rewards()`, depth-based verdict-blind reward |
+| `ml/reward.py` | `_encode_to_hex()`, `compute_rewards()`; **current reward = RL-v2 validity-gated ladder** (RL_V2.md §3); the depth-based verdict-blind formula was the earlier RL-v1-era design |
 | `ml/enrich_dataset.py` | novelty_score + tertile binning for sft_retrain |
 | `ml/train_grpo_colab.ipynb` | Colab launcher (5-cell, idempotent Run All) |
 | `tools/kcov_validator/main.go` | Go binary: BPF_PROG_LOAD + KCOV → `{verdict, pcs:[]}` |
@@ -537,7 +556,9 @@ All HIGH/MEDIUM items from `.scratch/fact-check/general-knowledge-fact-check.md`
 | Total unique PCs explored (run 1) | 1,638 | `results/rl_analysis_pcs.csv` |
 | Progressively-new PCs (run 1) | **137** (README says 138 — off-by-one; CSV is authoritative) | `results/rl_analysis_pcs.csv` |
 | Benchmark pass-rate (sft_retrain_cp1500, merged_fp16) | ~15–20% | `benchmarks/runs/` |
-| Benchmark avg PCs (sft_retrain_cp1500, merged_fp16) | ~254k | `benchmarks/runs/` |
+| Benchmark avg raw KCOV trace length (sft_retrain_cp1500, merged_fp16) | ~254k (`avg_pcs` = raw trace, **not** coverage; distinct ≈2,400/prog) | `benchmarks/runs/` |
+| SFT-v2 (full, sft-1epoch-v2) valid-unique PCs | 3,462 (n=1k) → 3,862 (n=20k) — saturates | RL_V2.md §1, `benchmarks/diversity/` |
+| RL-v2 phase-B (cp200, n=5k) valid-unique PCs | 3,606 (on the SFT saturation curve — no breakthrough) | `benchmarks/diversity/rl-phaseB-cp200-n5000-seed42.json` |
 | Buzzer coverage race (500 programs) | 23 valid, 4,915 unique PCs | `data/corpus/buzzer_coverage.csv` |
 | LLM first ACCEPTED program | program #8 (vs buzzer #159) | `data/corpus/model_coverage.csv` |
 | verifier.c line count (Linux 6.8) | ~21,000 | github.com/torvalds/linux/blob/v6.8/kernel/bpf/verifier.c |

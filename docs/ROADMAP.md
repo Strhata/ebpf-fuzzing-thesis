@@ -2,6 +2,12 @@
 **Target:** July graduation (45-day window). Extend to October if needed.
 **Last updated:** 2026-05-31
 
+> ⚠️ **SUPERSEDED by [`PROJECT_HISTORY.md`](PROJECT_HISTORY.md) + [`RL_V2.md`](RL_V2.md).** Several
+> entries below are *true-then, false-now*: the experimental phase was **not** closed (SFT-v2 +
+> RL-v2 followed); RL-v2 **ran** (200 steps) with a **validity-gated** reward, not the verdict-blind
+> depth reward; the reward server tunnel is **ngrok**, not the Cloudflare Quick Tunnel named here.
+> Kept as the historical decisions log; do not cite its status claims.
+
 ---
 
 ## Decisions Log
