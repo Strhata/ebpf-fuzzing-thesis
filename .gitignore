@@ -56,6 +56,9 @@ thesis/**/*.synctex.gz
 thesis/**/*.bcf
 thesis/**/*.run.xml
 thesis/**/*.pdf
+# ...but figure assets under thesis/figures/ are source, not build output — keep them
+!thesis/figures/
+!thesis/figures/**
 
 # Knowledge graph output
 graphify-out/
