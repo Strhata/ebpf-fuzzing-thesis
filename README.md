@@ -39,7 +39,7 @@ unchanged** — used only as a data generator, not part of the research contribu
 | SFT-v1 (`curated_3ep`) | ✅ | Generates valid programs, but verifier-log format is ~232 tok/insn → only ~2 instructions fit the budget → too trivial to explore |
 | RL-v1 (`rl_grpo_v2`) | ✅ negative result | 8,370 steps; reward had zero within-group variance → GRPO gradient starvation (`reward_std=0`, no learning). **Taught us: fix format + reward.** Not a failure — information. |
 | Reward + format redesign | ✅ | Stripped format; depth-based verdict-blind reward; remote (Colab) reward server |
-| SFT-v2 (`sft-1epoch-v2`, full 1-epoch) | ✅ | Generates real, **deep** programs. Weakness: **low diversity** — clusters; valid-coverage **saturates** (17.5× more valid programs → +12% unique PCs). (An earlier partial probe `sft_retrain`/cp1500 is the n=20 "19%" benchmark — same work, fewer steps.) |
+| SFT-v2 (`sft-1epoch-v2`, full 1-epoch) | ✅ | Generates real, **deep** programs. Weakness: **low diversity** — clusters; valid-coverage **saturates** (~16× more valid programs → only ~+28% unique PCs; the metric is noisy ±~12%, the sub-linearity is robust). (An earlier partial probe `sft_retrain`/cp1500 is the n=20 "19%" benchmark — same work, fewer steps.) |
 | RL-v2 (validity-gated novelty reward) | 🔬 ran, no breakthrough | Phase-A smoke + phase-B 200 steps: cleared the RL-v1 `std=0` trap but RL's valid programs sit *on* the SFT saturation curve. Under-trained + benchmarked out-of-regime. See [`docs/JOURNAL.md`](docs/JOURNAL.md) (2026-06-08). |
 
 **On the old "60% pass-rate":** it was SFT-v1 measured through a clang gate whose parser bug
