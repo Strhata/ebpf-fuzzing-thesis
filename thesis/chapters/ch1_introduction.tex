@@ -70,15 +70,6 @@ fixed Go strategies: \texttt{pointer\_arithmetic} and \texttt{coverage\_based}.
 BRF~\cite{brf} uses a constraint-based generator to produce type-correct programs.
 Neither employs a learned model of BPF program structure.
 
-Buzzer does collect KCOV coverage data from the kernel during its
-\texttt{coverage\_based} runs --- but, as this work discovered, only to
-expose human-readable metrics via an internal HTTP server.
-The coverage information is never used to guide program generation or mutation;
-programs are produced by the same hard-coded Go strategy regardless of which
-kernel paths they have already covered.
-Buzzer is therefore not a coverage-guided fuzzer in the sense of AFL~\cite{afl}:
-there is no feedback loop from coverage observations back to the mutation engine.
-
 On the LLM side, recent work has demonstrated that language models can generate
 syntactically valid inputs for fuzzing JavaScript engines~\cite{covrl}, general
 C programs~\cite{fuzz4all}, and syscall interface specifications~\cite{kernelgpt}.
@@ -88,58 +79,50 @@ coverage instrumentation as an RL reward signal.
 This identifies a genuine and previously unfilled gap: \textit{no existing system
 combines LLM-guided eBPF program generation with live KCOV kernel PC coverage as
 a reinforcement-learning feedback signal for the BPF verifier.}
-The insight that buzzer's KCOV loop is open --- metrics exposed but not consumed
---- was the concrete discovery that motivated building this closed loop.
+This thesis builds such a system. Buzzer serves as its inspiration and as the
+source of training data; the contribution is the learned, coverage-rewarded
+generator that no prior work provides.
 
 % --------------------------------------------------------------------------
 \section{Contributions}
 \label{sec:contributions}
 % --------------------------------------------------------------------------
 
-This thesis makes the following four contributions:
+This thesis makes the following three contributions:
 
 \begin{enumerate}
 
-  \item \textbf{End-to-end pipeline.}
+  \item \textbf{An end-to-end LLM-driven fuzzing system.}
         We design and implement a complete pipeline for LLM-guided eBPF verifier
         fuzzing: a modified buzzer instance dumps BPF programs and verifier outcomes
         as JSONL at the kernel FFI boundary; a QLoRA fine-tuning stage trains a
         language model on the resulting dataset; a GRPO RL stage uses KCOV kernel
         PC coverage as the reward signal; and a Go binary running inside a
         KCOV-instrumented Linux~6.8 VM validates each generated program and
-        returns its coverage trace.
-        The stages are independently replaceable, making the pipeline reusable for
-        different research goals by swapping the SFT data or the reward function.
+        returns its coverage trace. The central engineering obstacle --- bridging
+        LLM text to raw BPF bytecode without a clang dependency --- is solved by a
+        pure-Python encoder. The stages are independently replaceable, making the
+        pipeline reusable by swapping the SFT data or the reward function.
 
-  \item \textbf{SFT result.}
-        We fine-tune Qwen2.5-Coder-1.5B~\cite{qwen25coder} with QLoRA~\cite{qlora}
-        on a balanced dataset of 27,000 BPF program--verifier-log pairs.
-        The fine-tuned model achieves a verifier pass-rate of 60\%, compared to 1\%
-        for the zero-shot base model, a 60$\times$ improvement.
-        This result confirms that a 1.5-billion-parameter model can acquire
-        BPF verifier syntax from labeled programs using parameter-efficient
-        fine-tuning on consumer hardware (8~GB VRAM).
+  \item \textbf{The diversity wall: a characterized negative result.}
+        On the metric that matters --- unique KCOV PCs reached by \emph{valid}
+        programs --- fine-tuning solves validity but not exploration. The model
+        progresses from trivial one-instruction programs to deep, valid ones, yet
+        their coverage \emph{saturates}: increasing the number of valid programs by
+        more than an order of magnitude reaches only marginally more verifier paths,
+        because the generator collapses onto a narrow mode of similar programs.
+        We show this collapse originates at the supervised stage and quantify it.
+        \emph{Diversity, not validity, is the wall.}
 
-  \item \textbf{Failure-mode diagnosis.}
-        We run a GRPO RL training loop (run~1, 8,370 steps) and observe a training
-        collapse: \texttt{reward\_std}${}={}$0 at step~$\approx$1,300, after
-        which coverage exploration stalls at 137 new kernel PCs discovered.
-        Post-run analysis traces the root cause to a single code path in the
-        \texttt{kcov\_validator} binary: KCOV traces were discarded for programs
-        rejected by the verifier, making all rejected programs appear identical to
-        GRPO and zeroing the within-group gradient signal.
-        We ground the diagnosis in the GRPO gradient-starvation
-        literature~\cite{grpo-starvation} and fix the bug.
-
-  \item \textbf{Reward redesign.}
-        We propose and implement a depth-based, verdict-blind reward function.
-        Programs are scored by the number of kernel PCs reached during verification
-        and by a discovery bonus for PCs not seen in prior batches, independent of
-        whether the verifier accepts or rejects the program.
-        This design guarantees non-zero within-group reward variance even when all
-        completions are rejected, structurally preventing the gradient starvation
-        observed in run~1.
-        A full training run with this reward (run~2) is left as future work.
+  \item \textbf{GRPO gradient starvation: diagnosis and a structural fix.}
+        We run a GRPO loop (run~1, 8{,}370 steps) and observe a training collapse:
+        the within-group reward standard deviation falls to zero in 99.5\% of
+        batches, zeroing the gradient~\cite{grpo-starvation}. We trace the cause to a
+        homogeneous reward and fix it with a \emph{validity-gated soft-floor}
+        reward, which grants rejected programs graded partial credit --- guaranteeing
+        non-zero within-group variance by construction --- while keeping accepted
+        programs strictly higher, so the policy is still driven toward validity. A
+        second run confirms the starvation does not recur.
 
 \end{enumerate}
 
@@ -160,9 +143,10 @@ format decision, and the design and redesign of the RL reward function.
 Chapter~\ref{ch:implementation} details the implementation of the four main
 components: the pure-Python BPF encoder, the \texttt{kcov\_validator} Go binary,
 the GRPO training loop, and the remote reward pipeline for cloud-based training.
-Chapter~\ref{ch:results} presents the experimental results: SFT training dynamics
-and pass-rate evaluation, RL run~1 coverage exploration, plateau diagnosis, and
-reward redesign validation.
+Chapter~\ref{ch:results} presents the experimental results as the sequence of runs
+that produced them --- SFT-1, RL run~1's gradient starvation, the reward and format
+redesign, SFT-2, and RL run~2 --- and characterizes the diversity wall that is the
+central finding.
 Chapter~\ref{ch:conclusions} draws conclusions from the work, summarises the
 lessons learned about the pipeline and about GRPO reward design, and enumerates
 concrete directions for future work.

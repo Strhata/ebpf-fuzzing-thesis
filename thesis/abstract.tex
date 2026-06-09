@@ -12,26 +12,28 @@ sicurezza dei programmi~--- rappresenta pertanto un obiettivo di alto valore:
 falle logiche nel verifier possono permettere a codice non privilegiato di uscire
 dalla sandbox e compromettere il sistema host.
 
-Questa tesi presenta una pipeline automatizzata per il fuzzing coverage-guided del
-verifier eBPF di Linux tramite un large language model (LLM) fine-tunato.
-A partire da circa 2 milioni di programmi eBPF raccolti al confine FFI del kernel
-mediante una versione modificata del fuzzer Buzzer, curiamo un dataset bilanciato
-di 27\,000 campioni distribuiti tra le classi di errore del verifier ed eseguiamo
-il fine-tuning di Qwen2.5-Coder-1.5B tramite QLoRA per generare assembly in
-formato verifier-log sintatticamente valido.
-Applichiamo poi l'apprendimento per rinforzo GRPO con un segnale di reward derivato
-dalla copertura del codice kernel (KCOV), addestrando il modello a esplorare
-percorsi del verifier più profondi e meno visitati.
-Una formulazione del reward verdict-blind e basata sulla profondità evita il
-problema di collasso del reward osservato quando programmi accettati e rifiutati
-vengono premiati in modo diverso.
+Questa tesi indaga se un large language model (LLM) fine-tunato possa effettuare il
+fuzzing del verifier eBPF di Linux --- una direzione per la quale non abbiamo
+trovato lavori pubblicati precedenti. A partire da circa 2 milioni di programmi
+eBPF raccolti al confine FFI del kernel mediante una versione modificata del fuzzer
+Buzzer, curiamo un dataset bilanciato di 27\,000 campioni distribuiti tra le classi
+di errore del verifier ed eseguiamo il fine-tuning di Qwen2.5-Coder-1.5B tramite
+QLoRA. Applichiamo poi l'apprendimento per rinforzo GRPO con un reward derivato
+dalla copertura del codice kernel (KCOV), usando un reward vincolato alla validità
+con soglia morbida che mantiene non nulla la varianza del reward intra-gruppo
+--- correggendo il collasso del gradiente per starvation --- premiando comunque
+solo i programmi validi.
 
-I risultati sperimentali mostrano che il modello fine-tunato migliora il pass-rate
-rispetto alla baseline zero-shot, e che la fase di training RL coverage-guided
-guida con successo l'esplorazione di nuovi percorsi del codice kernel.
-Il sistema dimostra che il fuzzing guidato da LLM è un approccio valido per la
-ricerca sulla sicurezza del verifier, e fornisce una pipeline open-source
-riproducibile per lavori futuri.
+Il risultato centrale è che \emph{la diversità, non la validità, è il muro}.
+Il fine-tuning porta il modello a generare programmi profondi e validi, ma la loro
+copertura satura: aumentare di oltre un ordine di grandezza il numero di programmi
+validi raggiunge solo marginalmente più percorsi del verifier, perché il generatore
+collassa su una modalità ristretta di programmi simili. Questo collasso ha origine
+nella fase supervisionata; il ciclo di rinforzo, pur apprendendo, è stato troppo
+breve per superarlo, lasciando aperto se un RL guidato dalla copertura possa
+riuscirci. I contributi sono il sistema end-to-end, questo risultato negativo
+caratterizzato con il suo meccanismo, e la correzione del reward, forniti come
+pipeline open-source riproducibile.
 
 \bigskip
 \noindent\textbf{Parole chiave:} eBPF, fuzzing, modelli linguistici di grandi dimensioni,
@@ -49,24 +51,25 @@ The eBPF verifier~--- the kernel component responsible for guaranteeing program
 safety~--- is therefore a high-value target: logical flaws in the verifier can
 allow unprivileged code to escape the sandbox and compromise the host system.
 
-This thesis presents an automated pipeline for coverage-guided fuzzing of the Linux
-eBPF verifier using a fine-tuned large language model (LLM).
-Starting from approximately 2 million eBPF programs collected at the kernel FFI
-boundary using a modified version of the Buzzer fuzzer, we curate a balanced
-dataset of 27,000 samples across verifier error classes and fine-tune
-Qwen2.5-Coder-1.5B via QLoRA to generate syntactically valid verifier-log-format
-assembly.
-We then apply GRPO reinforcement learning with a reward signal derived from kernel
-code coverage (KCOV), training the model to explore deeper and less-visited
-verifier paths.
-A verdict-blind, depth-based reward formulation avoids the reward-collapse problem
-observed when accepted and rejected programs are rewarded differently.
+This thesis investigates whether a fine-tuned large language model (LLM) can fuzz
+the Linux eBPF verifier --- a direction for which we find no prior published work.
+From approximately 2 million eBPF programs collected at the kernel FFI boundary
+using a modified version of the Buzzer fuzzer, we curate a balanced dataset of
+27,000 samples across verifier error classes and fine-tune Qwen2.5-Coder-1.5B via
+QLoRA. We then apply GRPO reinforcement learning with a reward derived from live
+kernel code coverage (KCOV), using a validity-gated soft-floor reward that keeps
+the within-group reward variance non-zero --- fixing a gradient-starvation
+collapse that halts a naive design --- while still rewarding only valid programs.
 
-Experimental results show that the fine-tuned model improves pass-rate over the
-zero-shot baseline, and that the coverage-guided RL training phase successfully
-drives exploration of new kernel code paths.
-The system demonstrates that LLM-guided fuzzing is a viable approach for verifier
-security research, and provides a reproducible open-source pipeline for future work.
+Our central finding is that \emph{diversity, not validity, is the wall}.
+Fine-tuning makes the model generate deep, valid programs, but their coverage
+saturates: raising the number of valid programs by more than an order of magnitude
+reaches only marginally more verifier paths, because the generator collapses onto a
+narrow mode of similar programs. This collapse originates at the supervised stage;
+the reinforcement-learning loop, though it learns, was too short to overcome it,
+leaving open whether coverage-rewarded RL can. The contributions are the end-to-end
+system, this characterized negative result with its identified mechanism, and the
+reward fix --- delivered as a reproducible open-source pipeline.
 
 \bigskip
 \noindent\textbf{Keywords:} eBPF, fuzzing, large language models, reinforcement learning,
