@@ -11,6 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// ---------------------------------------------------------------------------
+// Modifications (C) 2025 Stefano Raheli.
+// This file has been changed from the original google/buzzer source: the FFI
+// boundary around ValidateEbpfProgram was instrumented to dump
+// (bytecode_hex, verifier_log, verdict) records as JSONL at BPF_PROG_LOAD, to
+// build the supervised fine-tuning corpus described in the accompanying thesis.
+// These modifications are likewise licensed under the Apache License 2.0.
+// ---------------------------------------------------------------------------
 
 package units
 

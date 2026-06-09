@@ -40,8 +40,12 @@ wandb/
 # Scratch / planning docs
 .scratch/
 
+# Local-only writing style guide (never committed)
+thesis/STYLE.md
+
 # Claude Code
 CLAUDE.md
+.claude/
 
 # LaTeX build artifacts
 thesis/**/*.aux

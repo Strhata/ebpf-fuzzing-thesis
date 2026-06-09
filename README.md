@@ -181,3 +181,17 @@ Fixed in commit c8a9d02 — `readPCs()` helper now called for both ACCEPTED and 
 **Periodic health checks:** `SanityCheckCallback` fires every hour during local training,
 logging VM status, verdict breakdown, and cumulative PC count to `results/sanity_checks.log`.
 Disabled automatically in remote-reward mode (`--remote-reward-url`).
+
+## Licensing
+
+This project is licensed under the **Apache License, Version 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+Exception — **buzzer** ([google/buzzer](https://github.com/google/buzzer), Copyright Google LLC, Apache 2.0) is vendored in two places, each keeping buzzer's `LICENSE`, original copyright headers, and an in-file change notice per Apache 2.0 §4(b):
+- `fuzzing/buzzer/` — full copy used for data collection (modified: `pkg/units/ffi.go`).
+- `fuzzing/buzzer-coverage-race/` — two patched files kept for benchmark reproducibility (modified: `main.go`, `coverage_based.go`).
+
+Buzzer's compiled binary is not distributed here. `data/corpus/buzzer_coverage.csv` is buzzer *measurement output* (not source), provided with attribution. Buzzer is used as a program generator, data source, and benchmark baseline; see Chapter 3 of the thesis.
+
+Released artifacts:
+- **Dataset** (`Strhata/ebpf-corpus`, HuggingFace): generated *output* of buzzer, not its source — licensed CC-BY-4.0, with buzzer credited as the generator.
+- **Model adapter** (QLoRA on Qwen2.5-Coder-1.5B): a derivative of the base model and inherits its license (Apache 2.0); verify against the current model card before release.
