@@ -1,242 +1,258 @@
 \chapter{Experimental Results}
 \label{ch:results}
 
+This chapter presents the experiments in the order they were run, because each
+run's failure motivated the next design change: SFT-1 produced valid but trivial
+programs; RL run~1 starved its own gradient; a reward and format redesign followed;
+SFT-2 produced deep programs but revealed a diversity weakness; RL run~2 cleared the
+starvation but ran into that weakness as a wall. The chapter closes by
+characterizing the wall directly.
+
+A note on what counts. Per Chapter~\ref{ch:introduction}, the metric of interest is
+the number of \emph{unique KCOV PCs reached by valid programs}; verifier pass-rate
+is a diagnostic, never a result. A model that emits a single trivial valid program
+scores a near-perfect pass-rate and explores nothing. Percentages therefore appear
+below only as diagnostics, and always with that caveat.
+
 % --------------------------------------------------------------------------
-\section{Supervised Fine-Tuning}
+\section{SFT-1: Valid but Trivial}
 \label{sec:results-sft}
 % --------------------------------------------------------------------------
 
-\subsection{Training Dynamics}
+\subsection{Training}
 \label{sec:sft-training}
 
-Qwen2.5-Coder-1.5B~\cite{qwen25coder} was fine-tuned on the 27,514-example SFT
+Qwen2.5-Coder-1.5B~\cite{qwen25coder} was fine-tuned on the 27{,}514-example SFT
 dataset using rank-16 QLoRA on the Q, K, V, and O projections of all attention
-layers.
-Training ran for 3 complete epochs (9,288 gradient steps) with an effective batch
-size of~8 via gradient accumulation, maximum sequence length of 768~tokens,
-learning rate $2 \times 10^{-4}$ with AdamW 8-bit, and BF16 precision with
-FlashAttention-2.
+layers, for 3 epochs (9{,}288 gradient steps), effective batch size~8 via gradient
+accumulation, maximum sequence length 768~tokens, learning rate
+$2\times10^{-4}$ with AdamW 8-bit, BF16 with FlashAttention-2. The evaluation loss
+fell from 0.637 to 0.557 and stabilised from the end of epoch~2 onward, with train
+and eval loss tracking closely (no significant overfitting).
 
-The evaluation loss decreased from 0.637 at step~0 to 0.557 at step~9,288.
-The loss curve stabilises from the end of epoch~2 (approximately step~6,000)
-onward, with train and eval loss tracking closely throughout: no significant
-overfitting is observed.
-The 3-epoch checkpoint is selected as the SFT model for all downstream
-evaluation and RL training.
+\subsection{What the Model Could Do}
+\label{sec:sft1-capability}
 
-\subsection{Pass-Rate Evaluation}
-\label{sec:passrate}
+The fine-tuned model learned BPF syntax and register conventions: it generates
+programs that the verifier accepts, where the zero-shot base model produces almost
+none. But the programs are \emph{trivial} --- typically one or two instructions.
+The cause is the representation: the verifier-log assembly format
+(Section~\ref{sec:format-decision}) costs roughly 232~tokens per instruction once
+the register-state annotations are included, so the completion budget leaves room
+for only a handful of instructions. The model could produce valid BPF, but not
+programs long enough to exercise anything interesting in the verifier.
 
-The fine-tuned model is evaluated against the zero-shot Qwen2.5-Coder-1.5B base
-model.
-Both models generate 100 programs from the same prompt template at temperature
-0.9 with greedy-decoding fallback for programs that fail to parse.
-Each generated program is passed through the pure-Python BPF encoder; programs
-that encode successfully are submitted to the \texttt{kcov\_validator} binary
-inside the KCOV VM; the verifier verdict is recorded.
-The pass-rate is defined as the fraction of the 100 generated programs that
-receive an ACCEPTED verdict from the Linux~6.8 verifier.
-
-\begin{table}[h]
-\centering
-\caption{SFT pass-rate: fine-tuned model vs.\ zero-shot baseline}
-\label{tab:passrate}
-\begin{tabular}{lrrrr}
-\toprule
-Model                    & $N$ & Encoded & Accepted & Pass-rate \\
-\midrule
-curated-merged (SFT)     & 100 & 73       & 60       & 60.0\%    \\
-zero-shot (base model)   & 100 &  1       &  1       &  1.0\%    \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The fine-tuned model achieves a verifier pass-rate of 60.0\%, compared to 1.0\%
-for the zero-shot base model: a 60-fold improvement (Table~\ref{tab:passrate}).
-These results are sourced from \texttt{results/passrate\_summary.csv},
-\texttt{results/passrate\_run\_curated.log}, and
-\texttt{results/passrate\_run\_zeroshot.log}.
-
-The 13 programs that encoded successfully but were rejected (73 encoded, 60
-accepted) contain syntactically valid BPF bytecode that the verifier rejects for
-semantic reasons: out-of-bounds memory access, invalid type coercions, or
-constraint violations that the model generates plausibly but cannot fully satisfy.
-This gap is expected: the SFT objective is next-token prediction over the training
-distribution, not verifier satisfaction; the model acquired BPF syntax and
-register-naming conventions, but not the complete semantics of the verifier's
-type and bounds analysis.
-These partially-correct programs --- valid enough to encode, but rejected at the
-semantic level --- are in fact the most interesting inputs for RL training: they
-reach the verifier and trigger its analysis logic, providing coverage signal even
-in the absence of acceptance.
-
-An extended evaluation over 400 generated programs
-(\texttt{results/passrate\_curated-merged-400.csv}) yields a pass-rate of 54.8\%
-(219 accepted of 400 generated, 226 encoded), confirming that the 60\% figure
-from the primary evaluation is representative and not inflated by sample variance.
-
-These results answer RQ1 affirmatively: a 1.5-billion-parameter code language
-model can acquire sufficient knowledge of BPF verifier syntax to pass the
-verifier 60\% of the time, using parameter-efficient fine-tuning on consumer
-hardware (8~GB VRAM).
+As a diagnostic only: measured through the pure-Python encoder, SFT-1's syntactic
+accept rate is about 73\% (the frequently-quoted ``60\%'' was an artifact of a
+clang parser that mis-reads verifier register-state lines as instructions). This
+number is not a result. A 73\% accept rate on
+two-instruction programs discovers nothing, and is recorded only to make the point
+that \emph{validity is not coverage}. SFT-1 answers RQ1 in the narrow,
+prerequisite sense of Chapter~\ref{ch:methodology}: the model acquired BPF syntax,
+not the ability to explore.
 
 % --------------------------------------------------------------------------
-\section{RL Training: Run 1 (\texttt{rl\_grpo\_v2})}
+\section{RL Run 1: Gradient Starvation}
 \label{sec:results-rl}
 % --------------------------------------------------------------------------
 
-\subsection{Coverage Exploration}
+RL run~1 (\texttt{rl\_grpo\_v2}) used GRPO with $G=4$, $\beta=0.01$, maximum
+completion length 600~tokens, on the local RTX~4070 Laptop GPU, for 8{,}370 steps.
+It did not learn. Cumulative new-PC growth ceased at approximately step~1{,}300 and
+nothing further was discovered in the remaining $\approx$7{,}000 steps
+(Figure~\ref{fig:rl-coverage}, left).
+
+\subsection{Coverage}
 \label{sec:coverage}
 
-RL run~1 was executed with GRPO configuration: $G = 4$ completions per prompt,
-KL penalty $\beta = 0.01$, maximum completion length 600 tokens, running on the
-local RTX~4070~Laptop GPU (8.59~GB VRAM).
-The run executed for 8,370 gradient steps.
+Two distinct quantities must be separated. The \emph{total} coverage frontier at
+the end of the run was 1{,}638 distinct PCs, but this includes the
+$\approx$1{,}501 PCs already reached during SFT evaluation; the \emph{incrementally
+new} contribution of RL was only 137 PCs
+(\texttt{results/rl\_analysis\_pcs.csv}; the README's 138 is an off-by-one
+counting artifact). Growth was bursty and brief: no new PCs for the first 97
+batches, then a series of bursts up to batch~1{,}241, after which only two further
+PCs were ever found (batches 3{,}036 and 4{,}873).
 
-Two coverage metrics are reported, and they must be interpreted carefully as they
-measure distinct quantities.
-
-\emph{Total unique PCs} (1,638): the size of the cumulative coverage frontier
-at the end of run~1, counting every distinct kernel PC address that appeared in
-any KCOV trace across all evaluated programs
-(source: \texttt{results/rl\_pc\_set.json}).
-This set includes PCs reached during the SFT pass-rate evaluation (which
-established a baseline of approximately 1,501 unique PCs before RL training
-began) as well as PCs discovered during the RL run itself.
-
-\emph{Incrementally new PCs} (137): the number of kernel PC addresses that were
-seen for the first time during RL training, i.e., PCs not present in the
-coverage frontier at the start of the run
-(source: \texttt{results/rl\_analysis\_pcs.csv}).
-This is the direct measure of how much additional exploration the RL phase
-contributed.
-The README records 138 new PCs, which is an off-by-one artefact from the
-boundary-counting convention; the authoritative figure from the CSV is~137.
-
-Coverage growth was highly concentrated.
-No new PCs were found for the first 97 batches.
-The first discovery event occurred at batch~97 (4 new PCs);
-by batch~1,241, the cumulative count had reached~135 new PCs through a series
-of bursts.
-After batch~1,241, only two further PCs were ever found (at batches~3,036
-and~4,873), and no new coverage was discovered in the remaining $\approx$6,500
-batches of the run.
-
-\subsection{Plateau Diagnosis}
+\subsection{Diagnosis: \texttt{reward\_std} Collapse}
 \label{sec:plateau-results}
 
-Analysis of \texttt{results/rl\_analysis\_tiers.csv} reveals the reward collapse
-in precise terms.
-Across 7,823 reward-evaluation batches in segment~1, the within-group reward
-standard deviation $\sigma_r$ was non-zero in only 41 batches (0.5\%).
-For the remaining 7,782 batches (99.5\%), $\sigma_r = 0$.
-The 41 non-zero batches correspond almost exactly to the 9 discovery events
-listed above: a batch that finds new PCs assigns reward~1.0 to the completing
-program and 0.1 to the others, producing $\sigma_r > 0$ and a non-zero gradient.
-Once the discovery events cease after batch~1,241, no further non-zero $\sigma_r$
-occurs except for rare isolated batches ($\sigma_r = 0.05$) that reflect a single
-completion with a marginally different reward in an otherwise uniform group.
+The cause is visible directly in the reward variance
+(Figure~\ref{fig:rl-std}, left). Across the run, the within-group reward standard
+deviation $\sigma_r$ was zero in 99.5\% of batches (mean $\sigma_r \approx 0.001$).
+The GRPO advantage is $A_i=(r_i-\bar r)/\sigma_r$
+(Equation~\ref{eq:grpo-advantage}); when $\sigma_r=0$ the gradient is identically
+zero and no update occurs --- the gradient-starvation failure mode
+of~\cite{grpo-starvation}. The few non-zero-variance batches coincide almost
+exactly with the discovery events: a batch that finds a new PC briefly creates
+reward spread, then variance returns to zero.
 
-The GRPO gradient is proportional to the advantage $A_i = (r_i - \bar{r}) / \sigma_r$
-(Equation~\ref{eq:grpo-advantage}).
-When $\sigma_r = 0$, the gradient is identically zero: the model parameters are
-not updated, and the training run degenerates into a consume-compute loop with no
-learning.
-This is the gradient starvation failure mode documented in~\cite{grpo-starvation}.
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{figures/rl_reward_std.pdf}
+  \caption{Within-group reward standard deviation per training step. \textbf{Left
+  (RL-1):} $\sigma_r$ is exactly zero in 99.5\% of batches (mean $0.001$) --- the
+  gradient starves. \textbf{Right (RL-2 phase~B):} the validity-gated soft-floor
+  reward keeps $\sigma_r$ alive (mean $0.224$, range $0.01$--$0.44$), never
+  sustained-zero. Source: WandB runs \texttt{hapj9sah}, \texttt{bz5ymfzl}.}
+  \label{fig:rl-std}
+\end{figure}
 
-The verdict breakdown illuminates the structural cause.
-Over the entire run, 31,125 of 31,258 completions (99.7\%) were accepted by the
-verifier; only 102 (0.3\%) were rejected, and 31 (0.1\%) failed to encode.
-The near-total absence of rejected programs is a direct consequence of SFT: the
-model was trained on a prompt with a \texttt{Status:~VALID} header, and it
-learned to generate programs that satisfy the verifier almost all of the time.
-During RL inference, this behaviour persists.
-As a result, almost every GRPO group consists of four accepted programs, all of
-which receive reward~0.1 once the coverage frontier is saturated --- producing
-uniform reward and zero gradient.
-
-A secondary factor is the KCOV bug fixed in commit~\texttt{c8a9d02}: even the
-small minority of rejected programs would have appeared identical to the reward
-function (all returning \texttt{pcs:~[]}) prior to the fix, further suppressing
-variance in any group that contained a rejected completion.
-Because both the prompt bias and the KCOV bug coexisted in run~1, their individual
-contributions to the gradient collapse cannot be separated from the run~1 data
-alone.
+The structural cause was twofold. First, a bug in \texttt{kcov\_validator} returned
+an empty PC list for every REJECTED program, so all rejected completions looked
+identical to the reward function (fixed in commit~\texttt{c8a9d02}). Second, SFT-1
+was prompted with a \texttt{Status:~VALID} header, and during RL inference it
+produced accepted programs 99.7\% of the time; once the coverage frontier
+saturated, every completion in a group received the same reward. The KCOV bug is
+the primary and sufficient cause of the zero variance; the prompt bias is a
+secondary contributor. The \emph{result} of run~1 is this diagnosis --- not the 137
+PCs it happened to touch.
 
 % --------------------------------------------------------------------------
-\section{Reward Redesign Validation}
+\section{Reward and Format Redesign}
 \label{sec:reward-validation}
 % --------------------------------------------------------------------------
 
-Following the bug fix in commit~\texttt{c8a9d02}, the corrected
-\texttt{kcov\_validator} binary was exercised in a 100-step comparison run
-(Config~A: $G=4$, max\_completion\_length=600, $\beta=0.01$, neutral prompt
-without a \texttt{Status:~VALID} header).
-Source: \texttt{results/comparison\_summary.txt} and
-\texttt{results/grpo\_completions.log}.
+Two changes followed from the run-1 diagnosis. The format was stripped of its
+verbose register-state header, so that real programs --- not just one or two
+instructions --- fit the completion budget. And the reward was redesigned to
+guarantee within-group variance (Section~\ref{sec:reward-redesign}): first a
+verdict-blind depth reward, which was rejected because it optimizes coverage from
+programs the verifier never accepts, and then the validity-gated soft-floor reward
+(Equation~\ref{eq:reward-v2}) carried into run~2.
 
-The comparison run generated 400 completions over 100 steps, with the following
-verdict breakdown: 46 accepted (11.5\%), 253 rejected (63.2\%), and 101 encode
-failures (25.2\%).
-The contrast with run~1's verdict distribution (99.7\% accepted) is striking and
-confirms the prompt-bias hypothesis directly: removing the \texttt{Status:~VALID}
-header shifts the model's output from nearly all-accepted to predominantly
-rejected, demonstrating that the SFT prompt was indeed anchoring the model toward
-valid-program generation during RL inference.
-
-The 253 rejected programs in the comparison run returned non-empty KCOV traces
-from the fixed binary, as evidenced by the reward function assigning
-differentiated depth scores to those programs.
-This validates the structural fix: after commit~\texttt{c8a9d02}, rejected
-programs are treated identically to accepted programs for the purpose of coverage
-attribution.
-The comparison run found 2 new kernel PCs (from a 1,501-PC baseline), indicating
-that the fixed pipeline is capable of coverage-guided exploration even in a
-predominantly-rejected regime.
-
-The depth-based verdict-blind reward (Equations~\ref{eq:depth}--\ref{eq:reward-v2})
-is designed to maintain non-zero within-group reward variance in this regime.
-With rejected programs now returning varied PC trace lengths --- rather than
-uniform empty traces --- the depth component assigns different scores to each
-completion based on how deeply the verifier processed that program, providing a
-gradient signal even when all $G$ completions are rejected.
-Full validation of this redesign under sustained training requires run~2.
+A 100-step comparison run validated the two structural fixes. Removing the
+\texttt{Status:~VALID} header shifted the verdict distribution from 99.7\% accepted
+(run~1) to 11.5\% accepted / 63.2\% rejected / 25.2\% encode-fail, confirming that
+the prompt had anchored generation toward valid programs. Crucially, those rejected
+programs now returned \emph{non-empty} KCOV traces from the fixed binary, so the
+reward function could assign them differentiated depth scores --- the precondition
+for non-zero $\sigma_r$ in a predominantly-rejected regime.
 
 % --------------------------------------------------------------------------
-\section{Run 2: Planned Experiment}
+\section{SFT-2: Deep Programs, Narrow Distribution}
+\label{sec:results-sft2}
+% --------------------------------------------------------------------------
+
+SFT-2 (\texttt{sft-1epoch-v2}) retrains on the stripped format with
+\texttt{[coverage]}/\texttt{[novelty]} control tokens, for one epoch
+(2{,}408~steps). The capability gain over SFT-1 is real: the model now generates
+\emph{deep} programs --- a median of 30 instructions at a 512-token budget, against
+SFT-1's one or two (Figure~\ref{fig:depth}). These are programs long enough to
+exercise the verifier's analysis.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/depth_collapse.pdf}
+  \caption{SFT-2 program-length distribution (canonical bytecode count). The
+  distribution is narrow and set by the token budget: mean $30.2\pm3.5$
+  instructions at 512~tokens, $57.6\pm8.6$ at 1024 (CV~$\approx0.12$--$0.15$). The
+  median simply scales with the budget; the model does not vary program length ---
+  the first sign of mode collapse.}
+  \label{fig:depth}
+\end{figure}
+
+The same figure exposes the weakness. The length distribution is \emph{narrow}
+(coefficient of variation $\approx 0.12$ at 512~tokens) and is pinned by the token
+budget: doubling the budget shifts the median from 30 to 58 instructions but does
+not widen the spread. The model emits essentially one characteristic program length
+rather than a diverse range. SFT-2's inference accept rate is low ($\approx 7.5\%$,
+a diagnostic, not a result): deep programs have far more surface on which to fail
+the verifier than two-instruction ones, so depth and validity trade off. This is
+the model that the diversity experiment and RL run~2 are built on.
+
+% --------------------------------------------------------------------------
+\section{RL Run 2: Starvation Cleared, Ceiling Intact}
 \label{sec:run2}
 % --------------------------------------------------------------------------
 
-Run~2 is the next experimental step, planned but not executed within the scope
-of this thesis.
-Its configuration is:
+RL run~2 trains SFT-2 with the validity-gated soft-floor reward
+(Equation~\ref{eq:reward-v2}), $G=16$, in two phases: a 20-step smoke test
+(phase~A) and a 200-step run with global novelty enabled (phase~B,
+\texttt{bz5ymfzl}).
 
-\begin{itemize}
-  \item \textbf{Reward function:} depth-based verdict-blind reward
-        (Section~\ref{sec:reward-redesign}, \texttt{ml/reward.py}).
-  \item \textbf{Prompt:} neutral header with no \texttt{Status:~VALID} prefix,
-        removing the valid-program attractor identified in run~1.
-  \item \textbf{Group size:} $G = 8$ completions per prompt, doubling the
-        within-group sample size relative to run~1 for a more reliable
-        $\sigma_r$ estimate.
-  \item \textbf{Max completion length:} 1,200 tokens, allowing the model to
-        generate longer programs that may exercise deeper verifier paths.
-  \item \textbf{Compute:} Colab Pro (A100 GPU) via the remote reward pipeline
-        (Section~\ref{sec:remote-reward}).
-\end{itemize}
+The mechanism result is robust. The reward variance stays alive throughout:
+$\sigma_r$ has mean $0.224$ (range $0.01$--$0.44$) over all 207 steps, against
+run~1's mean $0.001$ with 99\% of batches at exactly zero
+(Figure~\ref{fig:rl-std}). The soft floor structurally guarantees within-group
+variance even at the $\approx7\%$ accept rate, so the gradient starvation that
+halted run~1 \emph{does not recur}. This is a property of the reward design, not a
+trend that could reverse.
 
-The remote reward pipeline is fully implemented and locally validated: the
-\texttt{tools/reward\_server.py} FastAPI server, the Cloudflare Quick Tunnel,
-and the \texttt{ml/train\_grpo\_colab.ipynb} notebook are all in a
-run-ready state.
-The experimental phase of this thesis closed before the graduation deadline
-without executing run~2.
+The coverage result is negative but inconclusive. Cumulative PCs climbed during
+training (4{,}320~$\to$~4{,}836 total PCs, including those from rejected programs
+via the soft floor) but with a clearly decelerating rate
+(Figure~\ref{fig:rl-coverage}, right). On the metric that counts --- unique PCs
+from \emph{valid} programs --- run~2's checkpoint scores $\approx$3{,}685 (replicate
+range 3{,}606--3{,}833), squarely within the SFT-2 band
+(Section~\ref{sec:diversity-wall}): RL did not push coverage beyond the SFT
+ceiling. Validity nudged upward (from $\approx7.5\%$ to $\approx8.7\%$), consistent
+with the gate but a single under-powered measurement.
 
-The expected outcome is that the depth-based reward maintains $\sigma_r^2 > 0$
-throughout training, avoiding the gradient starvation that halted run~1, and
-that the neutral prompt widens exploration by allowing the model to generate
-programs across the full range of verifier outcomes rather than converging on
-the valid-program mode.
-Whether these design changes are sufficient to drive sustained coverage growth
-beyond the 137 new PCs found in run~1 is the open research question that
-run~2 will address.
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{figures/rl_coverage.pdf}
+  \caption{Cumulative unique PCs per training step (total, including
+  rejected-program PCs). \textbf{Left (RL-1):} plateaus at 1{,}638 after
+  step~$\approx$1{,}300. \textbf{Right (RL-2):} climbs to 4{,}836 but decelerates;
+  unlike RL-1 it has not gone flat by step~200.}
+  \label{fig:rl-coverage}
+\end{figure}
+
+The decisive caveat is scale. Run~2 ran $\approx$200 steps --- roughly $40\times$
+shorter than run~1's 8{,}370 --- and its coverage trajectory, while decelerating,
+had not gone flat the way run~1's did. Two hundred steps is too short to decide
+whether a KCOV-reward loop can break past the SFT ceiling. RQ2 therefore remains
+\emph{open}: run~2 establishes that the loop is healthy and localises the obstacle,
+but does not close the question.
+
+% --------------------------------------------------------------------------
+\section{The Diversity Wall}
+\label{sec:diversity-wall}
+% --------------------------------------------------------------------------
+
+The central finding of this thesis concerns the metric that counts: unique KCOV PCs
+from valid programs. It does not grow with the number of valid programs.
+
+Within a single SFT-2 generation run, increasing the number of valid programs by
+roughly $16\times$ (from~$\approx$80 to~$\approx$1{,}300) raises the cumulative
+count of unique valid PCs by only about $+28\%$
+(Figure~\ref{fig:saturation}). Coverage grows far sub-linearly: the
+thousandth valid program adds almost nothing the first hundred had not already
+reached. The model's valid programs march the same verifier paths.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/saturation.pdf}
+  \caption{Cumulative unique valid PCs versus number of valid programs (SFT-2,
+  three replicates shown as a band). Coverage rises steeply over the first
+  $\approx$100 programs, then flattens. RL-2 (green) and the 512-token SFT-2 run
+  (blue) sit in the same band. The valid-unique-PC metric is nondeterministic
+  ($\pm\sim$12\% at $n\approx1{,}300$); the sub-linear trend is robust across every
+  replicate, the exact percentage is not.}
+  \label{fig:saturation}
+\end{figure}
+
+\paragraph{A caveat on the metric.}
+Re-validating the \emph{same} programs gives different unique-PC counts run to run.
+KCOV records every kernel PC touched during the trace, including background
+interrupt and scheduler activity that accumulates with program count, and a few
+borderline verdicts flip on timing. The measured spread is $\pm\sim$1\% at 75 valid
+programs but $\pm\sim$12\% at 1{,}300. For this reason the result is reported as a
+range over replicates and the claim is made on the \emph{sub-linear trend}, which
+holds across every replicate (even the most generous: $16\times$ more programs buy
+at most $1.45\times$ the coverage), never on a single percentage.
+
+\paragraph{Mode collapse, and where it originates.}
+The narrow length distribution (Figure~\ref{fig:depth}) and the coverage saturation
+(Figure~\ref{fig:saturation}) are two faces of one phenomenon: the generator has
+collapsed onto a narrow mode of similar programs that traverse overlapping verifier
+paths. Neither scaling validity (RL run~2) nor doubling program length
+(512~$\to$~1024 tokens) escapes it. Critically, both measurements are taken on
+\emph{SFT-2's own generations}, so the wall is a property of the supervised base
+distribution; RL run~2 inherits it rather than creating it. This matches the
+diversity- and entropy-collapse documented for GRPO under a scalar reward
+(Section~\ref{sec:rw-rl-code}), and it reframes the open question: breaking the wall may
+require widening the base distribution at the SFT stage, not only reshaping the RL
+reward. Whether a longer, in-regime RL run or an explicitly diversity-preserving
+objective can exceed the SFT ceiling is the central question left open (RQ2).
