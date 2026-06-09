@@ -11,6 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// ---------------------------------------------------------------------------
+// Modifications (C) 2025 Stefano Raheli.
+// This file has been changed from the original google/buzzer source: the
+// MetricsUnit, CoverageManager, and addr2line initialisation were removed for
+// the coverage-race benchmark (the HTTP dashboard and addr2line goroutines do
+// not run under WSL and are overhead when only raw PC counts are needed).
+// Licensed under the Apache License 2.0.
+// ---------------------------------------------------------------------------
 
 // package main creates the executable for the fuzzer.
 package main

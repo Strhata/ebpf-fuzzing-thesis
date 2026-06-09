@@ -1,0 +1,34 @@
+eBPF Verifier Fuzzing via LLM-Guided Program Generation and Reinforcement Learning
+Copyright 2025 Stefano Raheli
+
+This product is licensed under the Apache License, Version 2.0 (see the LICENSE
+file), with the exception noted below.
+
+--------------------------------------------------------------------------------
+Third-party component: buzzer
+--------------------------------------------------------------------------------
+This repository includes source from buzzer (https://github.com/google/buzzer),
+Copyright Google LLC, licensed under the Apache License, Version 2.0, in two
+locations. Each retains a copy of the Apache License, the original Google
+copyright headers, and an in-file notice of any change per Section 4(b).
+
+(1) fuzzing/buzzer/ — a full copy of buzzer used for data collection.
+    License: fuzzing/buzzer/LICENSE. Modified file:
+      - pkg/units/ffi.go — instrumented at the BPF_PROG_LOAD FFI boundary to dump
+        (bytecode_hex, verifier_log, verdict) records as JSONL.
+
+(2) fuzzing/buzzer-coverage-race/ — two patched buzzer files kept for
+    reproducibility of the coverage-race benchmark (applied on top of an upstream
+    buzzer checkout at build time). License: fuzzing/buzzer-coverage-race/LICENSE.
+    Modified files:
+      - main.go — removed the MetricsUnit / CoverageManager / addr2line setup.
+      - coverage_based.go — added -coverage_log and -max_programs CLI flags and a
+        CSV coverage logger.
+
+Buzzer's compiled binary is not distributed in this repository. The file
+data/corpus/buzzer_coverage.csv is measurement output produced by running
+buzzer, not buzzer source, and is provided with attribution to buzzer.
+
+All modifications above are Copyright 2025 Stefano Raheli and are released under
+the same Apache License, Version 2.0. "buzzer" and "Google" are used only to
+identify the origin of the component and do not imply any endorsement.
