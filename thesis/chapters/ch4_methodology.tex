@@ -20,14 +20,27 @@ model achieves at inference time?
 \textbf{RQ3.} What failure modes arise in GRPO training with live kernel feedback,
 and how can they be diagnosed and systematically addressed?
 
-RQ1 is answered by the SFT experiment (Chapter~\ref{ch:results},
-Section~\ref{sec:results-sft}).
-RQ2 is partially answered by RL run~1 and is the subject of the planned run~2.
-RQ3 is the central analytical contribution of this thesis: the plateau diagnosis,
-the root-cause identification, and the reward redesign all address this question.
+RQ1 is answered affirmatively, but as a \emph{prerequisite rather than a result}:
+the SFT model learns to emit valid BPF (Chapter~\ref{ch:results},
+Section~\ref{sec:results-sft}), yet validity alone discovers nothing --- a model
+that emits a single trivial valid program scores a near-perfect pass-rate and
+explores no verifier paths. Validity is necessary, not sufficient; it is a
+stepping stone to RQ2, not an end in itself.
+
+RQ2 is the central empirical question, and it remains \emph{open}. Neither RL run
+reached the scale required to decide it: run~2 executed only $\approx$200 steps
+--- roughly $40\times$ shorter than run~1's 8{,}370 --- so whether a KCOV-reward
+GRPO loop can push coverage \emph{beyond} the SFT model's ceiling is undetermined.
+What the experiments do establish is the \emph{obstacle} in the way of an
+affirmative answer (Chapter~\ref{ch:results}).
+
+RQ3 is the analytical contribution of this thesis. Two failure modes are
+diagnosed: GRPO gradient starvation, which is identified from training logs and
+fixed by the reward redesign (Section~\ref{sec:reward-redesign}); and the
+diversity / mode-collapse wall, which is characterized but remains open.
 
 % --------------------------------------------------------------------------
-\section{Data Collection: Buzzer and the KCOV Discovery}
+\section{Data Collection: Instrumenting Buzzer}
 \label{sec:buzzer-data}
 % --------------------------------------------------------------------------
 
@@ -40,22 +53,19 @@ Buzzer is a Go binary that generates eBPF programs using one of two built-in
 strategies and submits each program to the kernel via a function called
 \texttt{ValidateEbpfProgram}, which wraps the \texttt{BPF\_PROG\_LOAD} system
 call and returns the verifier verdict and log.
-The \texttt{coverage\_based} strategy also opens the KCOV device, arms tracing
-before each \texttt{BPF\_PROG\_LOAD}, and collects the resulting PC counts,
-which it exposes as human-readable metrics via an internal HTTP server on a
-per-runner port.
+The \texttt{coverage\_based} strategy additionally opens the KCOV device and
+arms tracing before each \texttt{BPF\_PROG\_LOAD}.
 
-A close reading of the buzzer source code revealed that these KCOV metrics are
-display-only.
-The \texttt{coverage\_based} strategy generates programs using the same
-hard-coded Go construction logic regardless of which kernel paths previous
-programs have covered.
-KCOV data is never fed back to the generation loop.
-Buzzer is therefore not a coverage-guided fuzzer in the AFL sense:
-the feedback loop that would make it one is absent.
-This finding --- that a gap between data collection and mutation existed and was
-not previously documented --- was the concrete motivation for building the
-closed loop that this thesis implements.
+Buzzer is used in this work purely as a \emph{program generator and data source}:
+its generated programs and their verifier verdicts are the raw material for the
+SFT corpus. How buzzer uses its own KCOV instrumentation internally is outside the
+scope of this thesis, and no claim is made about it. The contribution here is not
+a comparison against buzzer's internals but a direction the literature does not
+yet cover: to the best of our knowledge, no published work fine-tunes a language
+model to generate eBPF programs and uses live kernel-verifier coverage as a
+reinforcement-learning reward signal for the BPF verifier
+(Chapter~\ref{ch:related-work}). Buzzer is the inspiration and the data source;
+the learned, coverage-rewarded generator is what is new.
 
 To produce the training corpus, the file
 \texttt{fuzzing/buzzer/pkg/units/ffi.go} was modified (approximately 50 lines)
@@ -250,14 +260,17 @@ the same prompt was reused verbatim during RL inference.
 This may have anchored the model's generation distribution toward valid programs,
 reducing the diversity of the $G$ completions within each group and thereby
 contributing to reward homogeneity.
-Because the KCOV bug and the prompt-bias confound coexisted in run~1, they cannot
-be disentangled without a second run using a neutral prompt.
+The KCOV bug is the primary and sufficient cause: once a rejected program's PCs
+are read, within-group variance is restored. The redesign below therefore targets
+it directly. The prompt-bias hypothesis is noted as a possible secondary
+contributor but was not pursued in isolation, as the reward redesign addresses the
+variance problem at its root.
 
 The bug was fixed in commit \texttt{c8a9d02}: the \texttt{readPCs()} call was
 moved outside the \texttt{if verdict == ACCEPTED} branch, so both ACCEPTED and
 REJECTED programs now return their full KCOV trace.
 
-\subsection{Reward Redesign: Depth-Based Verdict-Blind}
+\subsection{Reward Redesign: Validity-Gated Novelty with a Soft Floor}
 \label{sec:reward-redesign}
 
 The diagnosis in Section~\ref{sec:rl-plateau} identifies the structural
@@ -268,50 +281,59 @@ The v1 reward fails this requirement because REJECTED and accepted-but-no-new-PC
 programs both receive reward~0.1, and when the model generates mostly rejected
 programs these values are all equal.
 
-The redesigned reward removes the accept/reject verdict from the reward formula
-entirely.
-A program is scored by two components: a depth score proportional to the number
-of kernel PCs reached during verification, and a discovery bonus for PCs not seen
-in any prior batch.
-Both components are defined exclusively in terms of KCOV traces, which are now
-available for rejected programs following the bug fix.
+\paragraph{A first attempt, and why it was wrong.}
+The most direct fix is to remove the accept/reject verdict from the reward
+entirely and score each program purely by the depth of its KCOV trace plus a
+discovery bonus. This guarantees within-group variance --- a deeper trace earns a
+higher score whether or not the program is accepted --- and it was the first
+redesign implemented. It is, however, the wrong objective. \emph{Validity is a
+prerequisite for finding a verifier bug}: a rejected program proves the verifier
+did its job and is not a finding, whereas a bug is reached only along paths that
+an \emph{accepted} program exercises. A verdict-blind reward treats a deep but
+rejected program as equivalent to a valid one, and so optimizes coverage that
+cannot, by construction, lead to the outcome of interest. This mirrors how a
+coverage-guided fuzzer's corpus advances its frontier only on inputs that pass the
+gate. The verdict-blind reward was therefore superseded before any full run.
 
-Formally, let $|\mathrm{pcs}|$ be the number of distinct kernel PCs returned by
-\texttt{kcov\_validator} for a given program, $M$ the largest PC count observed
-across all programs evaluated so far (updated after each batch), and
-$S_{\mathrm{snap}}$ a snapshot of the cumulative coverage frontier taken before
-the current batch is evaluated.
-The reward is:
-\begin{align}
-  \mathrm{depth} &= \min\!\left(0.5,\;
-                     \frac{|\mathrm{pcs}|}{M} \cdot 0.5\right), \label{eq:depth}\\
-  \mathrm{bonus} &= 1.0 \text{ if } \exists\, p \in \mathrm{pcs} : p \notin S_{\mathrm{snap}},
-                   \text{ else } 0, \label{eq:bonus}\\
-  r              &= \mathrm{depth} + \mathrm{bonus}. \label{eq:reward-v2}
-\end{align}
+\paragraph{The validity-gated soft floor.}
+The reward used for RL run~2 keeps the verdict in the formula but as a
+\emph{monotonic gate} rather than a hard pass/fail: every accepted program scores
+strictly above every rejected one, yet rejected programs still receive graded
+partial credit so that variance never collapses. Let $|\mathrm{pcs}|$ be the
+number of distinct kernel PCs returned by \texttt{kcov\_validator}, $M$ the
+largest such count seen so far, and let $\nu_g(p)$ and $\nu_G(p)$ denote the
+within-batch and persistent (across-run) novelty of program~$p$. The reward is:
+\begin{equation}
+  r(p) =
+  \begin{cases}
+    0 & \text{encode fail, fewer than 15 insns, VM error, or crash},\\[2pt]
+    w_{\mathrm{rej}} \cdot \min\!\left(1, \dfrac{|\mathrm{pcs}|}{M}\right)
+      & \text{REJECTED (the \emph{soft floor})},\\[8pt]
+    w_{\mathrm{val}} + w_{g}\,\nu_g(p) + w_{G}\,\nu_G(p)
+      & \text{ACCEPTED}.
+  \end{cases}
+  \label{eq:reward-v2}
+\end{equation}
+with $w_{\mathrm{rej}} < w_{\mathrm{val}}$ by design (defaults
+$w_{\mathrm{rej}}=0.3$, $w_{\mathrm{val}}=1.0$, $w_g=1.0$, and $w_G$ enabled at
+$2.0$ for the global-novelty phase). The novelty terms reward programs that reach
+\emph{rarely visited} PCs: $\nu_g(p)$ averages $1-\mathrm{freq}/n_{\mathrm{acc}}$
+over $p$'s PCs within the batch, and $\nu_G(p)$ averages $1/(1+\mathrm{freq}_{G})$
+against a decayed global PC-frequency map maintained across the whole run.
 
-The pre-batch snapshot $S_{\mathrm{snap}}$ is critical for fairness: it ensures
-that all $G$ completions for a given prompt compete against the same coverage
-frontier regardless of the order in which they are evaluated within the batch.
-The depth component is capped at 0.5 to prevent a single program with an
-unusually large PC trace from saturating the reward scale and dominating the
-group-relative advantage.
-The discovery bonus is capped at 1.0; combined with the depth cap, the maximum
-reward per program is 1.5 under normal operation.
+\paragraph{Why this satisfies both constraints.}
+The soft floor gives a rejected program partial credit proportional to how far the
+verifier walked before rejecting it, so at the $\approx$7\% accept rate of the SFT
+model --- where most $G$-groups contain no accepted program at all --- within-group
+variance is \emph{structurally guaranteed}, directly fixing the $\sigma_r=0$
+starvation. At the same time the gate $w_{\mathrm{rej}}<w_{\mathrm{val}}$ keeps the
+policy pushing toward validity rather than away from it, and among accepted
+programs the novelty terms supply the exploration pressure --- the lever intended
+to counter the diversity collapse characterized in Chapter~\ref{ch:results}.
 
-Two special cases override the formula: an encode failure returns 0.0 (the
-program is not parseable and provides no coverage information), and an SSH
-timeout or VM crash returns 2.0 (the highest reward, preserving the crash signal
-from v1 as the most valuable exploration outcome).
-
-The key property of this design is that within-group reward variance is
-structurally guaranteed even in a fully rejected group.
-Programs that trigger deeper verifier paths --- more complex type-checking,
-longer control-flow analysis --- produce longer KCOV traces and therefore receive
-higher depth scores, providing a gradient signal proportional to exploration
-depth regardless of whether the verifier ultimately accepts or rejects the
-program.
-
-The redesigned reward function is implemented in \texttt{ml/reward.py}.
-A full training run (run~2) with this reward and a neutral prompt is left as
-future work and is described in Section~\ref{sec:run2}.
+The reward is implemented in \texttt{ml/reward.py} and served to the
+(Colab-hosted) trainer over HTTP by \texttt{tools/reward\_server.py}. RL run~2 uses
+$G=16$ (larger groups raise the chance of $\geq 1$ accepted program per group),
+maximum completion length 512, $\beta = 0.05$, learning rate $5\times10^{-6}$, and
+sampling temperature 0.9. Its results are reported in
+Chapter~\ref{ch:results}, Section~\ref{sec:run2}.
