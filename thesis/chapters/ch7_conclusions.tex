@@ -37,22 +37,36 @@ narrow mode --- one characteristic program length, the same verifier paths walke
 repeatedly. Neither scaling validity nor doubling program length escapes it.
 Because these measurements are taken on the supervised model's own generations, the
 collapse \emph{originates at the SFT base distribution}; the RL stage inherits it.
-A characterized negative result with an identified mechanism is the central
-empirical contribution of this thesis.
+Sub-linear coverage growth is the universal shape of a fuzzing corpus; what makes it
+load-bearing here is that it sets in early, resists both interventions meant to
+break it, and originates upstream of the RL stage. The experiment lacks a
+contrastive baseline --- a diverse generator, or buzzer at equal budget on this
+harness --- that would separate this from ordinary diminishing returns and convert
+the characterization into a proof; that comparison is the natural next experiment
+(Section~\ref{sec:future-work}). A characterized negative result with an identified
+mechanism is the central empirical contribution of this thesis.
 
 \textbf{GRPO gradient starvation: diagnosis and a structural fix.}
 RL run~1 stalled completely: the within-group reward standard deviation $\sigma_r$
 was zero in 99.5\% of batches, zeroing the GRPO gradient. The cause was a
-homogeneous reward --- a \texttt{kcov\_validator} bug that returned empty traces for
-rejected programs, compounded by a \texttt{Status:~VALID} prompt that anchored
-generation toward accepted programs. The fix is a validity-gated soft-floor reward:
-rejected programs receive graded partial credit for how far the verifier walked,
-guaranteeing within-group variance \emph{by construction}, while an accepted
-program always scores strictly higher so the policy is still pushed toward
-validity. RL run~2 confirmed the mechanism --- $\sigma_r$ held a mean of $0.224$
-against run~1's $0.001$, and the starvation did not recur. That a coverage reward
-must guarantee within-group variance to be trainable under GRPO is a reusable
-finding, independent of the eBPF setting.
+homogeneous reward: a \texttt{Status:~VALID} prompt anchored generation so that
+99.6\% of completions were accepted, and once the coverage frontier saturated every
+accepted program scored the same flat value, collapsing the within-group spread. A
+latent \texttt{kcov\_validator} bug that returned empty traces for rejected programs
+would have flattened the reward too, but at run~1's 0.3\% rejection rate it was
+immaterial; it mattered only once the prompt header was removed and rejection became
+common. The fix is a two-part reward redesign: a per-program novelty term that
+separates otherwise-equal accepted programs, and a validity-gated soft floor that
+grants rejected programs graded partial credit for how far the verifier walked ---
+together guaranteeing within-group variance \emph{by construction}, while an
+accepted program that clears the length floor always scores strictly higher so the
+policy is still pushed toward validity. The guarantee is the construction proof, not
+the empirical run-to-run comparison: run~2 changed several hyperparameters at once
+($G$, prompt format, SFT base, $\beta$), so its held-alive variance ($\sigma_r$ mean
+$0.224$ against run~1's $0.001$, starvation absent) is consistent with the proof
+rather than independent confirmation of it. That a coverage reward must guarantee
+within-group variance to be trainable under GRPO is a reusable finding, independent
+of the eBPF setting.
 
 \medskip
 Against the research questions of Chapter~\ref{ch:methodology}: \textbf{RQ1} is
@@ -82,7 +96,7 @@ thesis directly motivates to the deeper changes its central finding points to.
         Run~2 was ${\sim}40\times$ shorter than run~1 and was benchmarked outside
         its training regime. A longer run, evaluated at the training temperature
         and length, is needed before any conclusion about RQ2. The remote-reward
-        pipeline (\texttt{tools/reward\_server.py}, the Colab notebook) is ready.
+        pipeline built for run~2 is already in place to carry it.
 
   \item \textbf{A controlled length sweep.}
         Generate at several token budgets and measure validity and unique valid PCs

@@ -111,18 +111,23 @@ This thesis makes the following three contributions:
         their coverage \emph{saturates}: increasing the number of valid programs by
         more than an order of magnitude reaches only marginally more verifier paths,
         because the generator collapses onto a narrow mode of similar programs.
-        We show this collapse originates at the supervised stage and quantify it.
+        We show this saturation originates at the supervised stage and quantify it;
+        isolating it from the diminishing returns common to all fuzzers calls for a
+        contrastive baseline we identify but leave to future work.
         \emph{Diversity, not validity, is the wall.}
 
   \item \textbf{GRPO gradient starvation: diagnosis and a structural fix.}
         We run a GRPO loop (run~1, 8{,}370 steps) and observe a training collapse:
         the within-group reward standard deviation falls to zero in 99.5\% of
         batches, zeroing the gradient~\cite{grpo-starvation}. We trace the cause to a
-        homogeneous reward and fix it with a \emph{validity-gated soft-floor}
-        reward, which grants rejected programs graded partial credit --- guaranteeing
-        non-zero within-group variance by construction --- while keeping accepted
-        programs strictly higher, so the policy is still driven toward validity. A
-        second run confirms the starvation does not recur.
+        homogeneous reward --- a prompt-anchored policy that, once the coverage
+        frontier saturates, scores every completion alike --- and fix it with a
+        reward redesign that guarantees non-zero within-group variance by
+        construction: a per-program novelty term separates otherwise-equal accepted
+        programs, and a \emph{validity-gated soft floor} grants rejected programs
+        graded partial credit, while accepted programs always score strictly higher
+        so the policy is still driven toward validity. A second run confirms the
+        starvation does not recur.
 
 \end{enumerate}
 

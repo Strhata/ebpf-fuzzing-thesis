@@ -59,13 +59,9 @@ arms tracing before each \texttt{BPF\_PROG\_LOAD}.
 Buzzer is used in this work purely as a \emph{program generator and data source}:
 its generated programs and their verifier verdicts are the raw material for the
 SFT corpus. How buzzer uses its own KCOV instrumentation internally is outside the
-scope of this thesis, and no claim is made about it. The contribution here is not
-a comparison against buzzer's internals but a direction the literature does not
-yet cover: to the best of our knowledge, no published work fine-tunes a language
-model to generate eBPF programs and uses live kernel-verifier coverage as a
-reinforcement-learning reward signal for the BPF verifier
-(Chapter~\ref{ch:related-work}). Buzzer is the inspiration and the data source;
-the learned, coverage-rewarded generator is what is new.
+scope of this thesis, and no claim is made about it; the comparison this thesis
+draws is one of generation method (Chapter~\ref{ch:related-work}), not of buzzer's
+internals.
 
 To produce the training corpus, the file
 \texttt{fuzzing/buzzer/pkg/units/ffi.go} was modified (approximately 50 lines)
@@ -75,12 +71,16 @@ accept/reject verdict, and (where present) the error line and error reason.
 Records are appended to a file on a virtio-9p share visible from the host.
 
 The collection infrastructure consists of a single QEMU virtual machine running
-a Linux kernel compiled with KASAN only (\texttt{bzImage\_kasan}), managed
+a Linux~6.8 kernel compiled with KASAN only (\texttt{bzImage\_kasan}), managed
 by a Docker container that auto-restarts the VM on crash.
 Collection ran for approximately one week and produced roughly 2~million
 (bytecode, verifier-log) pairs.
-Thirty kernel-panic and KASAN-report dumps were captured in
-\texttt{results/crash\_logs/} during the collection period.
+The RL reward oracle (Chapter~\ref{ch:implementation}) boots the \emph{same} 6.8
+kernel source tree with KCOV additionally enabled (\texttt{bzImage\_kasan\_kcov})
+on the same Debian~trixie image, so the verifier accept/reject verdict is
+identical between the corpus the model is trained on and the oracle it is later
+scored against; the two builds differ only by the presence of KCOV
+instrumentation, which does not affect verification outcome.
 
 % --------------------------------------------------------------------------
 \section{SFT Pipeline Design}
@@ -222,15 +222,15 @@ A snapshot of the frontier is taken before each batch is evaluated so that all
 $G$ completions for a given prompt compete against the same baseline, independent
 of evaluation order within the batch.
 
-\subsection{Root Cause: KCOV Bug and \texttt{reward\_std} Collapse}
+\subsection{Root Cause: \texttt{reward\_std} Collapse under Prompt-Anchored Acceptance}
 \label{sec:rl-plateau}
 
-Run~1 (\texttt{rl\_grpo\_v2}) executed 8,370 training steps.
+Run~1 executed 8,370 training steps.
 Cumulative new-PC growth ceased at approximately step~1,300, after which the
 model made no further progress despite 7,000 additional steps of compute.
-Post-run analysis of \texttt{results/grpo\_completions.log} revealed that
-\texttt{reward\_std}, computed per batch as the standard deviation of the $G$
-rewards, dropped to exactly zero from step~$\approx$1,300 onward.
+The per-step training logs show that \texttt{reward\_std}, computed per batch as
+the standard deviation of the $G$ rewards, dropped to exactly zero from
+step~$\approx$1,300 onward.
 
 A zero \texttt{reward\_std} is a definitive indicator of training collapse.
 The GRPO advantage for completion~$i$ is
@@ -243,45 +243,56 @@ and GPU time.
 This condition, known as gradient starvation, is analysed formally
 in~\cite{grpo-starvation}.
 
-The root cause was a conditional in the \texttt{kcov\_validator} Go binary:
-\texttt{readPCs()} was called only inside a branch taken when
-\texttt{verdict == ACCEPTED}.
-For every REJECTED program, the function returned \texttt{pcs:~[]}.
-At run~1 inference time, the SFT model was still generating a high proportion of
-rejected programs.
-Consequently, the majority of completions in each GRPO group received reward~0.1
-with an empty PC set; every completion appeared identical from the reward
-function's perspective; and within-group variance collapsed to zero.
+The mechanism that drove every group to identical rewards was a prompt-anchored
+generation distribution meeting a saturating coverage frontier.
+The SFT training data paired each program with a \texttt{Status:~VALID} header, and
+the same header was reused verbatim as the RL prompt; under it the model generated
+programs the verifier accepted in 99.6\% of completions.
+Once the coverage frontier stopped growing --- at approximately step~1,300 ---
+essentially every completion was an accepted program that reached no
+previously-unseen PC, a case the v1 reward (Table~\ref{tab:reward-v1}) scores at a
+flat 0.1.
+With all $G$ completions in a group scoring 0.1, the within-group variance was zero
+and the gradient vanished.
+The collapse was therefore a property of the reward's coarse top tier under
+near-universal acceptance, not of any single rejected-program class.
 
-A secondary hypothesis, which cannot be verified from run~1 data, concerns the
-prompt template.
-The SFT training data used a \texttt{Status:~VALID} header as the prompt, and
-the same prompt was reused verbatim during RL inference.
-This may have anchored the model's generation distribution toward valid programs,
-reducing the diversity of the $G$ completions within each group and thereby
-contributing to reward homogeneity.
-The KCOV bug is the primary and sufficient cause: once a rejected program's PCs
-are read, within-group variance is restored. The redesign below therefore targets
-it directly. The prompt-bias hypothesis is noted as a possible secondary
-contributor but was not pursued in isolation, as the reward redesign addresses the
-variance problem at its root.
+A second, latent defect in the \texttt{kcov\_validator} binary compounded the
+design but was not the operative cause in run~1.
+\texttt{readPCs()} was called only on the \texttt{ACCEPTED} branch, so every
+REJECTED program returned an empty PC set and was indistinguishable to the reward
+function.
+In run~1 this touched almost nothing: rejected programs were 0.3\% of completions,
+far too few to move the batch variance.
+The defect becomes load-bearing only once rejection is common --- the regime run~2
+enters after the prompt header is removed
+(Chapter~\ref{ch:results}, Section~\ref{sec:reward-validation}), where rejected
+programs dominate and an empty trace would again flatten the reward.
+The redesign below addresses both ends: it reads the trace unconditionally so
+rejected programs carry differentiated depth, and it replaces the flat
+accepted-program tier with a novelty term so that accepted programs no longer
+collapse to a single value once the frontier saturates.
 
-The bug was fixed in commit \texttt{c8a9d02}: the \texttt{readPCs()} call was
-moved outside the \texttt{if verdict == ACCEPTED} branch, so both ACCEPTED and
-REJECTED programs now return their full KCOV trace.
+The fix makes trace collection unconditional --- the KCOV PCs are read for every
+load attempt rather than only for accepted programs --- so both ACCEPTED and
+REJECTED programs return their full trace and within-group variance is restored.
 
 \subsection{Reward Redesign: Validity-Gated Novelty with a Soft Floor}
 \label{sec:reward-redesign}
 
 The diagnosis in Section~\ref{sec:rl-plateau} identifies the structural
 requirement for GRPO training to proceed: the reward function must produce
-non-zero within-group variance $\sigma_r^2 > 0$ even when all $G$ completions
-are rejected by the verifier.
-The v1 reward fails this requirement because REJECTED and accepted-but-no-new-PCs
-programs both receive reward~0.1, and when the model generates mostly rejected
-programs these values are all equal.
+non-zero within-group variance $\sigma_r^2 > 0$ across the group compositions the
+policy actually generates --- whether the group is dominated by accepted programs,
+as in run~1, or by rejected ones, as in run~2's lower-acceptance regime.
+The v1 reward fails this requirement at both ends.
+It collapses an all-accepted group to a flat 0.1 once the frontier saturates
+(every accepted program reaching no new PC), and it collapses an all-rejected group
+to a flat 0.1 as well, since REJECTED and accepted-but-no-new-PC programs share the
+same value.
+In either case the $G$ rewards are equal and the gradient vanishes.
 
-\paragraph{A first attempt, and why it was wrong.}
+\paragraph{A rejected alternative: the verdict-blind reward.}
 The most direct fix is to remove the accept/reject verdict from the reward
 entirely and score each program purely by the depth of its KCOV trace plus a
 discovery bonus. This guarantees within-group variance --- a deeper trace earns a
@@ -296,40 +307,98 @@ coverage-guided fuzzer's corpus advances its frontier only on inputs that pass t
 gate. The verdict-blind reward was therefore superseded before any full run.
 
 \paragraph{The validity-gated soft floor.}
-The reward used for RL run~2 keeps the verdict in the formula but as a
-\emph{monotonic gate} rather than a hard pass/fail: every accepted program scores
-strictly above every rejected one, yet rejected programs still receive graded
-partial credit so that variance never collapses. Let $|\mathrm{pcs}|$ be the
-number of distinct kernel PCs returned by \texttt{kcov\_validator}, $M$ the
-largest such count seen so far, and let $\nu_g(p)$ and $\nu_G(p)$ denote the
-within-batch and persistent (across-run) novelty of program~$p$. The reward is:
+The redesigned reward first applies an \emph{eligibility gate} --- output must
+encode to valid bytecode and clear a 15-instruction length floor --- and then
+sorts every program that clears the gate into one of three strictly ordered
+outcomes. A program with \emph{no usable signal} scores zero; a \emph{rejected but
+informative} program earns graded partial credit --- the \emph{soft floor}; an
+\emph{accepted} program earns a full validity bonus plus a novelty term. The
+ordering is the point: among gate-eligible programs an accepted program always
+outscores any rejected one, so the policy is still pulled toward validity, while
+the partial credit given to rejected programs is what keeps the within-group
+reward variance from collapsing. The gate is applied before the verdict, so a
+sub-floor program is scored zero whether or not the verifier would have accepted
+it; the strict accepted-over-rejected ordering is therefore a statement about
+programs that clear the floor. In RL run~2 this is not a binding edge case ---
+SFT-2's median program is 30 instructions (Section~\ref{sec:results-sft2}), well
+above the floor --- but the gate must be stated explicitly for the ordering
+guarantee to hold exactly.
+
+Let $|\mathrm{pcs}|$ be the number of distinct kernel PCs that
+\texttt{kcov\_validator} records while the verifier processes the program, and let
+$M$ be the largest such count seen so far --- a running maximum that normalises the
+floor into $[0,1]$. Let $\nu_g(p)$ and $\nu_G(p)$ be the within-batch and
+persistent novelty of program~$p$, defined below. The reward is:
 \begin{equation}
   r(p) =
   \begin{cases}
-    0 & \text{encode fail, fewer than 15 insns, VM error, or crash},\\[2pt]
+    0 & \text{no usable signal},\\[2pt]
     w_{\mathrm{rej}} \cdot \min\!\left(1, \dfrac{|\mathrm{pcs}|}{M}\right)
-      & \text{REJECTED (the \emph{soft floor})},\\[8pt]
+      & \text{REJECTED --- the \emph{soft floor}},\\[8pt]
     w_{\mathrm{val}} + w_{g}\,\nu_g(p) + w_{G}\,\nu_G(p)
       & \text{ACCEPTED}.
   \end{cases}
   \label{eq:reward-v2}
 \end{equation}
-with $w_{\mathrm{rej}} < w_{\mathrm{val}}$ by design (defaults
-$w_{\mathrm{rej}}=0.3$, $w_{\mathrm{val}}=1.0$, $w_g=1.0$, and $w_G$ enabled at
-$2.0$ for the global-novelty phase). The novelty terms reward programs that reach
-\emph{rarely visited} PCs: $\nu_g(p)$ averages $1-\mathrm{freq}/n_{\mathrm{acc}}$
-over $p$'s PCs within the batch, and $\nu_G(p)$ averages $1/(1+\mathrm{freq}_{G})$
-against a decayed global PC-frequency map maintained across the whole run.
 
-\paragraph{Why this satisfies both constraints.}
-The soft floor gives a rejected program partial credit proportional to how far the
-verifier walked before rejecting it, so at the $\approx$7\% accept rate of the SFT
-model --- where most $G$-groups contain no accepted program at all --- within-group
-variance is \emph{structurally guaranteed}, directly fixing the $\sigma_r=0$
-starvation. At the same time the gate $w_{\mathrm{rej}}<w_{\mathrm{val}}$ keeps the
-policy pushing toward validity rather than away from it, and among accepted
-programs the novelty terms supply the exploration pressure --- the lever intended
-to counter the diversity collapse characterized in Chapter~\ref{ch:results}.
+The three branches read as follows.
+The \emph{zero} branch covers every program that carries no exploration
+information: its output does not encode to valid bytecode, or it is shorter than a
+15-instruction floor (too small to exercise the verifier --- the floor stops the
+model from farming easy soft-floor credit with near-empty programs), or the load
+attempt could not be measured at all because of an infrastructure failure (an SSH
+timeout or VM error; see the note on crashes below).
+The \emph{soft floor} scores a rejected program by how deep the verifier walked
+before rejecting it: $|\mathrm{pcs}|/M$ is the fraction of the deepest trace yet
+seen that this program reached, capped at the ceiling $w_{\mathrm{rej}}$. A program
+the verifier throws out immediately scores near zero; one it rejects only after
+analysing almost all of it scores near $w_{\mathrm{rej}}$. This graded credit is
+what distinguishes otherwise-identical rejected programs and so holds
+$\sigma_r > 0$.
+The \emph{accepted} branch pays a flat validity bonus $w_{\mathrm{val}}$ plus the
+novelty terms, which reward reaching \emph{rarely visited} PCs.
+$\nu_g(p)$ averages $1-\mathrm{freq}/n_{\mathrm{acc}}$ over $p$'s PCs within the
+current batch, so a PC hit by few of the batch's accepted programs is worth more;
+$\nu_G(p)$ averages $1/(1+\mathrm{freq}_{G})$ against a decayed PC-frequency map
+kept across the whole run, so a PC rarely hit over the entire run is worth more and
+the decay lets long-abandoned regions become rewarding again.
+
+By construction $w_{\mathrm{rej}} < w_{\mathrm{val}}$ (defaults
+$w_{\mathrm{rej}}=0.3$, $w_{\mathrm{val}}=1.0$, $w_g=1.0$; $w_G$ is enabled at
+$2.0$ for the global-novelty phase), so the gate holds exactly: the best possible
+rejected program still scores below the weakest accepted program that clears the
+length floor.
+
+\paragraph{Crashes and infrastructure failures.}
+A load attempt that returns nothing --- because the VM crashed or because the SSH
+connection dropped --- is scored zero, uniformly across the affected batch. This
+reverses the v1 design (Table~\ref{tab:reward-v1}), which gave such timeouts the
+highest score, 2.0, on the assumption that a timeout marked a kernel crash and so a
+verifier defect. The two causes are indistinguishable at the reward layer: a
+crashed VM and a dropped connection both return nothing, so the v1 rule rewarded
+transient infrastructure noise as highly as a genuine bug --- a channel the policy
+could exploit without ever stressing the verifier. Genuine crashes would instead be
+recovered from the KASAN and kernel-panic instrumentation at the VM
+(Section~\ref{sec:buzzer-data}), where a real defect leaves a dump that a timeout
+does not. Crash detection therefore sits outside the reward entirely, with the
+component that can confirm it.
+
+\paragraph{Restoring within-group variance.}
+The redesign breaks the two degeneracies that flatten a group's rewards, one per
+regime. In run~1's near-universal-acceptance regime the group is all
+\emph{accepted}: under the v1 reward every member scored a flat 0.1 once the
+frontier saturated, so the variance vanished. The novelty term removes this
+degeneracy --- two accepted programs that walk different PCs earn different
+$\nu_g$, so $\sigma_r > 0$ even when no globally-new PC appears. In run~2's
+$\approx$7\% accept regime the harder case is the all-\emph{rejected} group, which
+arises for roughly a third of groups at $G=16$ ($0.93^{16}\approx0.31$): under v1
+every member scored the same flat 0.1, whereas under the soft floor they spread
+across a continuum of depth-proportional scores, so $\sigma_r > 0$ holds even
+before a single valid program appears. Together the two terms guarantee non-zero
+within-group variance across the full range of group compositions the policy
+produces, while the novelty weighting additionally carries the exploration pressure
+intended to counter the diversity collapse characterized in
+Chapter~\ref{ch:results}.
 
 The reward is implemented in \texttt{ml/reward.py} and served to the
 (Colab-hosted) trainer over HTTP by \texttt{tools/reward\_server.py}. RL run~2 uses
