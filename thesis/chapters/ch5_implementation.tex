@@ -186,60 +186,23 @@ checkpoint bookkeeping.
 \label{sec:remote-reward}
 % --------------------------------------------------------------------------
 
-GRPO training computes rewards by submitting each generated program to the
-\texttt{kcov\_validator} binary running inside the KCOV-instrumented VM.
-The VM requires a custom kernel compiled with \texttt{CONFIG\_KCOV} and cannot
-run in a cloud environment: cloud VMs run on hypervisors that do not expose
-raw \texttt{/sys/kernel/debug/kcov} access.
-At the same time, consumer GPU memory (8.59~GB on the RTX~4070~Laptop) constrains
-the local training throughput; a cloud GPU with more VRAM and higher compute
-throughput would accelerate RL run~2 significantly.
+The KCOV reward oracle cannot run in the cloud: \texttt{kcov\_validator} needs a
+custom kernel built with \texttt{CONFIG\_KCOV} and raw
+\texttt{/sys/kernel/debug/kcov} access, which cloud hypervisors do not expose.
+Training, on the other hand, benefits from a cloud GPU with more VRAM than the
+local 8.59~GB card. The pipeline therefore decouples the two: generation runs on a
+cloud GPU while reward evaluation stays on the local KCOV VM, connected by an HTTP
+bridge.
 
-The remote reward pipeline decouples the training compute (cloud) from the reward
-evaluation (local VM) to enable cloud-based RL training while preserving the
-KCOV feedback loop.
-It consists of three components.
+\texttt{tools/reward\_server.py} is a FastAPI server wrapping \texttt{ml/reward.py}.
+It accepts a batch of completions, invokes the reward function --- which calls
+\texttt{kcov\_validator} over SSH --- for each, and returns the scalar rewards. A
+pre-shared API key guards the endpoint. The trainer reaches the server over a
+tunnel (an ngrok static domain), passed via the \texttt{--remote-reward-url} flag;
+the specific tunnel provider is an implementation detail, not part of the
+contribution. The \texttt{ml/train\_grpo\_colab.ipynb} notebook orchestrates the
+cloud side and resumes from a checkpoint when one is present. HTTP calls are
+wrapped in an exponential-backoff retry loop, and the trainer aborts cleanly rather
+than training on missing rewards if the server stays unreachable.
 
-\textbf{\texttt{tools/reward\_server.py}.}
-A FastAPI HTTP server that wraps \texttt{ml/reward.py}.
-It accepts POST requests containing a JSON array of program completions, calls
-the reward function for each completion (which in turn invokes
-\texttt{kcov\_validator} over SSH), and returns a JSON array of scalar reward
-values.
-Requests must include a pre-shared API key in the \texttt{Authorization} header;
-this prevents unauthenticated queries during the period when the tunnel is active.
-
-\textbf{Cloudflare Quick Tunnel.}
-The local reward server runs on a machine behind a home router with no fixed
-public IP.
-A Cloudflare Quick Tunnel creates a stable HTTPS URL that proxies inbound
-connections from the public internet to the local server, without requiring
-port-forwarding configuration or a static IP.
-The tunnel URL is printed to the Colab session log at startup and is passed to
-\texttt{rl\_grpo.py} via the \texttt{--remote-reward-url} flag.
-
-\textbf{\texttt{ml/train\_grpo\_colab.ipynb}.}
-A five-cell Colab notebook that orchestrates the full cloud training setup.
-Cell~1 installs the pinned dependency versions (TRL~0.14.0, Transformers~5.x,
-QLoRA stack).
-Cell~2 starts the Cloudflare tunnel and prints the reward server URL.
-Cells~3--5 configure \texttt{GRPOConfig}, instantiate the trainer, and call
-\texttt{trainer.train()} with an optional \texttt{resume\_from\_checkpoint}
-argument for interrupted runs.
-The notebook is idempotent: re-running ``Run All'' without a checkpoint restarts
-from scratch; with a checkpoint present it resumes training.
-
-\textbf{Reliability design.}
-Cloudflare tunnel connections are subject to occasional transient failures.
-The reward function in \texttt{rl\_grpo.py} wraps each HTTP call to the reward
-server in an exponential-backoff retry loop: the first failure waits 1~second
-before retrying, subsequent failures double the wait up to a maximum back-off
-of 60~seconds.
-If the server remains unreachable after a configurable maximum number of retries,
-the trainer raises a \texttt{RewardServerError} exception that terminates the
-Colab session cleanly rather than silently continuing with missing rewards.
-
-The remote reward pipeline is fully implemented and was validated locally by
-running a short training loop (10 steps) with the reward server and tunnel
-active simultaneously.
-RL run~2 will be the first full execution of this pipeline.
+This pipeline carried RL run~2 (Chapter~\ref{ch:results}).
