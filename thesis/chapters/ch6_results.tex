@@ -149,17 +149,25 @@ exercise the verifier's analysis.
   \includegraphics[width=0.85\textwidth]{figures/depth_collapse.pdf}
   \caption{SFT-2 program-length distribution (canonical bytecode count). The
   distribution is narrow and set by the token budget: mean $30.2\pm3.5$
-  instructions at 512~tokens, $57.6\pm8.6$ at 1024 (CV~$\approx0.12$--$0.15$). The
-  median simply scales with the budget; the model does not vary program length ---
-  the first sign of mode collapse.}
+  instructions at 512~tokens, $57.6\pm8.6$ at 1024 (CV~$\approx0.12$--$0.15$).
+  Generations almost never emit a terminating \texttt{exit}, so each runs to the
+  token cap; the median is the budget divided by the per-instruction token cost,
+  and doubling the budget doubles it. The pinned length is therefore a property of
+  how generation terminates, not on its own evidence that the model cannot vary
+  length.}
   \label{fig:depth}
 \end{figure}
 
-The same figure exposes the weakness. The length distribution is \emph{narrow}
-(coefficient of variation $\approx 0.12$ at 512~tokens) and is pinned by the token
-budget: doubling the budget shifts the median from 30 to 58 instructions but does
-not widen the spread. The model emits essentially one characteristic program length
-rather than a diverse range. SFT-2's inference accept rate is low ($\approx 7.5\%$,
+The same figure exposes a weakness, but a weaker one than it first appears. The
+length distribution is \emph{narrow} (coefficient of variation $\approx 0.12$ at
+512~tokens), yet most of that narrowness is mechanical: the model almost never emits
+a terminating \texttt{exit}, so generation runs to the token cap and the length is
+fixed by the budget rather than chosen by the model. Doubling the budget shifts the
+median from 30 to 58 instructions without widening the spread, exactly as a
+budget-pinned length would. Length variety is therefore a weak diversity probe here
+and is not on its own evidence of mode collapse; the load-bearing evidence is path
+overlap, established in Section~\ref{sec:diversity-wall}. SFT-2's inference accept
+rate is low ($\approx 7.5\%$,
 a diagnostic, not a result): deep programs have far more surface on which to fail
 the verifier than two-instruction ones, so depth and validity trade off. This is
 the model that the diversity experiment and RL run~2 are built on.
@@ -182,9 +190,10 @@ halted run~1 \emph{does not recur}. This is a property of the reward design, not
 trend that could reverse. Run~2 differs from run~1 in several hyperparameters at
 once ($G$, the prompt format, the SFT base, $\beta$), so the absence of starvation
 is not attributed to the empirical run-to-run comparison; it is attributed to the
-construction proof of Section~\ref{sec:reward-redesign}, which makes $\sigma_r>0$
-hold by design across every group composition the policy can produce. The single
-confounded comparison is consistent with that proof, not a substitute for it.
+structural argument of Section~\ref{sec:reward-redesign}, which keeps $\sigma_r>0$
+across the group compositions the policy produces with non-negligible probability.
+The single confounded comparison is consistent with that argument, not a substitute
+for it.
 
 The coverage result is negative but inconclusive. Cumulative PCs climbed during
 training (4{,}320~$\to$~4{,}836 total PCs, including those from rejected programs
@@ -209,10 +218,15 @@ no directional claim is made about it.
 
 The decisive caveat is scale. Run~2 ran $\approx$200 steps --- roughly $40\times$
 shorter than run~1's 8{,}370 --- and its coverage trajectory, while decelerating,
-had not gone flat the way run~1's did. Two hundred steps is too short to decide
-whether a KCOV-reward loop can break past the SFT ceiling. RQ2 therefore remains
-\emph{open}: run~2 establishes that the loop is healthy and localises the obstacle,
-but does not close the question.
+had not gone flat the way run~1's did. That non-flatness is itself weak evidence:
+the cumulative curve counts PCs from rejected programs (via the soft floor) over the
+whole load-path trace, and by the measurement-noise model of
+Section~\ref{sec:diversity-wall} a slowly-climbing, never-quite-flat curve is also
+what background-PC accumulation alone produces, so it cannot be read as continued
+genuine discovery. Two hundred steps is in any case too short to decide whether a
+KCOV-reward loop can break past the SFT ceiling. RQ2 therefore remains \emph{open}:
+run~2 establishes that the loop is healthy and localises the obstacle, but does not
+close the question.
 
 % --------------------------------------------------------------------------
 \section{The Diversity Wall}
@@ -306,9 +320,21 @@ whether a non-collapsed generator escapes the same flattening. Nor is the absolu
 level anchored --- the fraction of the verifier's reachable PCs that $\approx$3{,}685
 represents is not measured, so saturation is not, on these data, distinguished from
 near-exhaustion on absolute grounds; the claim rests on the \emph{relative}
-flattening, not an absolute coverage level. Finally, the saturation curve rests on
-three replicates under a $\pm\sim$12\% nondeterministic metric, so the band is an
-estimate, not a tight bound. The conservative claim the data support is therefore:
+flattening, not an absolute coverage level. Two further confounds bear on the
+\emph{cause} of the narrowness, not just its magnitude. The SFT corpus is drawn
+entirely from buzzer's two hand-written strategies
+(Section~\ref{sec:buzzer-data}), so a narrow generation mode is equally consistent
+with a generator that collapsed \emph{below} its teacher and with one that faithfully
+imitates an already-narrow teacher; separating the two requires measuring buzzer's
+own path diversity on this harness --- the same contrastive baseline identified
+above. And the measurement pipeline itself filters toward uniformity before coverage
+is read: the reward's 15-instruction floor, the encoder's silent dropping of
+unparseable lines (Section~\ref{sec:encoder}), and generations that run to the token
+cap together admit only programs of a certain length and syntax, so part of the
+observed uniformity may be imposed by the harness rather than emitted by the
+generator. Finally, the saturation curve rests on three replicates under a
+$\pm\sim$12\% nondeterministic metric, so the band is an estimate, not a tight bound.
+The conservative claim the data support is therefore:
 \emph{within this model and this metric}, valid-program coverage saturates, the
 saturation originates at the SFT stage, and neither RL nor longer programs move it.
 The contrastive baseline that would convert ``saturation consistent with mode

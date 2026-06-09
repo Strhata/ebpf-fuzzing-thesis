@@ -33,16 +33,17 @@ trivial one- and two-instruction programs to deep, ${\sim}30$-instruction ones -
 but validity did not buy exploration. Coverage \emph{saturates}: increasing the
 number of valid programs by ${\sim}16\times$ raises unique valid PCs by only
 ${\sim}28\%$ (replicate range $+9$ to $+45\%$), and the generator collapses onto a
-narrow mode --- one characteristic program length, the same verifier paths walked
-repeatedly. Neither scaling validity nor doubling program length escapes it.
+narrow mode --- the same verifier paths walked repeatedly. Neither scaling validity
+nor doubling program length escapes it.
 Because these measurements are taken on the supervised model's own generations, the
 collapse \emph{originates at the SFT base distribution}; the RL stage inherits it.
 Sub-linear coverage growth is the universal shape of a fuzzing corpus; what makes it
 load-bearing here is that it sets in early, resists both interventions meant to
 break it, and originates upstream of the RL stage. The experiment lacks a
 contrastive baseline --- a diverse generator, or buzzer at equal budget on this
-harness --- that would separate this from ordinary diminishing returns and convert
-the characterization into a proof; that comparison is the natural next experiment
+harness --- that would separate this both from ordinary diminishing returns and from
+faithful imitation of buzzer's narrow two-strategy corpus, and so convert the
+characterization into a proof; that comparison is the natural next experiment
 (Section~\ref{sec:future-work}). A characterized negative result with an identified
 mechanism is the central empirical contribution of this thesis.
 
@@ -58,10 +59,11 @@ immaterial; it mattered only once the prompt header was removed and rejection be
 common. The fix is a two-part reward redesign: a per-program novelty term that
 separates otherwise-equal accepted programs, and a validity-gated soft floor that
 grants rejected programs graded partial credit for how far the verifier walked ---
-together guaranteeing within-group variance \emph{by construction}, while an
-accepted program that clears the length floor always scores strictly higher so the
-policy is still pushed toward validity. The guarantee is the construction proof, not
-the empirical run-to-run comparison: run~2 changed several hyperparameters at once
+together holding within-group variance away from zero across the group compositions
+the policy produces in practice, while an accepted program that clears the length
+floor always scores strictly higher so the policy is still pushed toward validity.
+The argument is structural, not the empirical run-to-run comparison: run~2 changed
+several hyperparameters at once
 ($G$, prompt format, SFT base, $\beta$), so its held-alive variance ($\sigma_r$ mean
 $0.224$ against run~1's $0.001$, starvation absent) is consistent with the proof
 rather than independent confirmation of it. That a coverage reward must guarantee
@@ -73,8 +75,11 @@ Against the research questions of Chapter~\ref{ch:methodology}: \textbf{RQ1} is
 answered, but only as a prerequisite --- the model learns to emit valid BPF, yet
 validity alone explores nothing. \textbf{RQ2} --- whether a KCOV-reward loop can
 push coverage beyond the SFT ceiling --- remains \emph{open}: run~2 cleared the
-starvation and its coverage was still climbing at step~200, roughly $40\times$
-shorter than run~1, so the question is unresolved rather than answered negatively.
+starvation but ran only $\approx$200 steps, roughly $40\times$ shorter than run~1,
+and the cumulative curve that had not yet flattened is consistent with load-path
+measurement noise rather than necessarily with new discovery
+(Chapter~\ref{ch:results}), so the question is unresolved rather than answered
+negatively.
 \textbf{RQ3} is answered in full: two failure modes are characterized --- gradient
 starvation, diagnosed and fixed, and the diversity wall, characterized and left
 open. The most actionable conclusion is that, because the collapse originates at

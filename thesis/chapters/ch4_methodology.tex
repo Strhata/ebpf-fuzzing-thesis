@@ -77,10 +77,12 @@ Collection ran for approximately one week and produced roughly 2~million
 (bytecode, verifier-log) pairs.
 The RL reward oracle (Chapter~\ref{ch:implementation}) boots the \emph{same} 6.8
 kernel source tree with KCOV additionally enabled (\texttt{bzImage\_kasan\_kcov})
-on the same Debian~trixie image, so the verifier accept/reject verdict is
-identical between the corpus the model is trained on and the oracle it is later
-scored against; the two builds differ only by the presence of KCOV
-instrumentation, which does not affect verification outcome.
+on the same Debian~trixie image, so the verifier accept/reject verdict is expected
+to be identical between the corpus the model is trained on and the oracle it is
+later scored against; the two builds differ only by the presence of KCOV
+instrumentation, which does not change the verifier's decision logic. This identity
+rests on the shared source tree rather than on a differential check, which was not
+run.
 
 % --------------------------------------------------------------------------
 \section{SFT Pipeline Design}
@@ -390,15 +392,29 @@ regime. In run~1's near-universal-acceptance regime the group is all
 frontier saturated, so the variance vanished. The novelty term removes this
 degeneracy --- two accepted programs that walk different PCs earn different
 $\nu_g$, so $\sigma_r > 0$ even when no globally-new PC appears. In run~2's
-$\approx$7\% accept regime the harder case is the all-\emph{rejected} group, which
-arises for roughly a third of groups at $G=16$ ($0.93^{16}\approx0.31$): under v1
-every member scored the same flat 0.1, whereas under the soft floor they spread
-across a continuum of depth-proportional scores, so $\sigma_r > 0$ holds even
-before a single valid program appears. Together the two terms guarantee non-zero
-within-group variance across the full range of group compositions the policy
-produces, while the novelty weighting additionally carries the exploration pressure
-intended to counter the diversity collapse characterized in
-Chapter~\ref{ch:results}.
+$\approx$7\% accept regime (the rate measured once the prompt header is removed) the
+harder case is the all-\emph{rejected} group, which arises for roughly a third of
+groups at $G=16$ ($0.93^{16}\approx0.31$): under v1 every member scored the same flat
+0.1, whereas under the soft floor they spread across a continuum of
+depth-proportional scores, so $\sigma_r > 0$ holds even before a single valid program
+appears.
+
+The guarantee is conditional, and the condition is worth stating precisely. Reward
+variance is non-zero whenever a group contains at least two gate-eligible programs
+that differ in novelty (the all-accepted case) or in trace depth (the all-rejected
+case); the novelty weighting additionally carries the exploration pressure intended
+to counter the diversity collapse characterized in Chapter~\ref{ch:results}. Two
+degenerate compositions still flatten the variance: a group in which \emph{every}
+completion lands in the zero branch --- all encode-failures, all sub-floor, or a
+batch-wide infrastructure failure --- and a group of rejected programs that all
+reach \emph{identical} depth. Neither is structurally excluded; both are
+empirically negligible at $G=16$ (an all-encode-failure group is
+$\approx 0.25^{16}$ at the observed encode-failure rate, and exact depth ties across
+a whole group are vanishing once $M$ is large). The redesign therefore holds
+$\sigma_r > 0$ across the group compositions the policy produces with non-negligible
+probability, rather than across every composition that can in principle occur --- a
+weaker statement than a universal guarantee, but the one the data and the reward's
+zero branch actually support.
 
 The reward is implemented in \texttt{ml/reward.py} and served to the
 (Colab-hosted) trainer over HTTP by \texttt{tools/reward\_server.py}. RL run~2 uses
