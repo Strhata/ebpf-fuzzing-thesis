@@ -117,6 +117,18 @@ is an SFT-2 property** (measured on SFT-2 generations); whether KCOV-reward RL c
 `cumulative_pcs=4836` is *total* PCs (includes invalid programs' verifier-walk PCs via the soft floor)
 — distinct from the valid-unique metric that counts.
 
+## 2026-06-08 — saturation metric is nondeterministic; "+12 %" superseded by a replicate range
+While building the F2 figure, re-validating the *same* saved candidates on the VM gave different
+valid-unique-PC counts run-to-run (e.g. n=20k: 4,728 then 3,696). Cause: KCOV records every kernel PC
+hit during the trace (background interrupt/scheduler PCs accumulate with program count) and a few
+borderline verdicts flip on timing. Ran replicates (`tools/measure_saturation.py` →
+`benchmarks/diversity/saturation_replicates.json`): spread ±~1 % at 75 valid, **±~12 % at 1,300 valid**.
+The earlier single-sample headline "17.5× → +12 % (3,462→3,862)" is a **low draw of a noisy metric** and
+is superseded: within one n=20k run, ~16× more valid programs raise unique valid PCs by **~+28 %
+(replicate range +9–45 %)**. The sub-linear trend (the wall) is robust across every replicate; only the
+exact % was unstable. Lesson: headline the trend, report the range, never a bare % for this metric.
+Figure `thesis/figures/saturation.*` shows all replicate curves as a band. (FACTS §5 updated.)
+
 ## 2026-06-08 — thesis-revision plan drafted (grill → PRD → issues)
 Ran grill-me → to-prd → to-issues on the thesis rewrite. Artifacts in gitignored
 `.scratch/thesis-revision/` (`PRD.md`, `issues-draft.md`): 10 vertical slices in 3 milestones

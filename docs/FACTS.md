@@ -25,8 +25,8 @@ Data collection → SFT → RL (GRPO) → coverage evaluation (unique PCs from v
 ```
 
 **The finding so far: diversity, not validity, is the wall.** Valid programs *saturate* in coverage —
-17.5× more valid programs buy only +12 % unique PCs. Raising validity does not help; the programs
-cluster onto the same verifier paths.
+~16× more valid programs buy only ~+28 % unique PCs (replicate range +9–45 %; the metric is noisy, the
+sub-linearity is robust). Raising validity does not help; the programs cluster onto the same verifier paths.
 
 | Axis | Value |
 |---|---|
@@ -110,17 +110,29 @@ LoRA r=16/α=32 on q/k/v/o. (Why these: DECISIONS.)
 
 **The metric (unique KCOV PCs from valid programs) and its saturation — the actual result:**
 
-| | SFT-2 n=1k (512 tok) | SFT-2 n=20k (1024 tok) | RL-2 phase-B cp200 n=5k |
+> **The valid-unique-PC metric is nondeterministic.** Re-validating the *same* saved programs gives
+> different counts run-to-run: KCOV records every kernel PC touched during the trace (incl. background
+> interrupt/scheduler PCs that accumulate with program count), and a few borderline verdicts flip
+> (timing). Measured spread over replicates: **±~1 % at 75 valid, ±~12 % at 1,300 valid.** So a single
+> pass is a noisy point estimate — report mean (range), and headline the *sub-linear trend*, never a
+> precise %. Replicates: `benchmarks/diversity/saturation_replicates.json`.
+
+| | SFT-2 @512 (75 v) | SFT-2 @1024 (1,312 v) | RL-2 cp200 (433 v) |
 |---|---:|---:|---:|
-| valid programs | 75 | 1,310 | 433 |
-| **valid-unique PCs** (the metric) | 3,462 | 3,862 | 3,606 |
-| distinct PCs / valid program | 2,337 | 2,428 | — |
+| valid programs | 75 | ~1,312 | 433 |
+| **valid-unique PCs** — mean (range) | 3,421 (3,365–3,455) | 4,347 (3,649–4,700) | 3,685 (3,606–3,833) |
+| replicates | 4 | 3 | 3 |
+| distinct PCs / valid program | ~2,337 | ~2,428 | — |
 | novelty_score | 0.752 | 0.758 | 0.749 |
 
-→ **17.5× more valid programs → +12 % unique PCs.** The saturation is an **SFT-2 property** (measured on
-SFT-2 generations). RL-2's cp200 valid-unique (3,606) also sits on this curve — but whether KCOV-reward
-RL can *exceed* the SFT-2 ceiling is **open (RQ2)**, not closed (the 200-step run is ~40× shorter than
-RL-1; see JOURNAL 2026-06-08). The demonstrated finding is the SFT-2 wall; the RL question is unfinished.
+→ **Within one n=20k run, ~16× more valid programs (≈80 → 1,300) raise unique valid PCs by only
+~+28 % (replicate range +9 % to +45 %)** — i.e. coverage grows *far sub-linearly* with program count;
+the generator revisits the same verifier paths. The sub-linearity is robust across every replicate
+(even the most generous: 16× programs → 1.45× PCs); only the exact % is noisy. *(The earlier single-sample
+"17.5× → +12 %" is superseded — +12 % was a low draw of a ±12 %-noisy metric.)* The saturation is an
+**SFT-2 property** (measured on SFT-2 generations). RL-2's cp200 (3,685, range 3,606–3,833) sits in the
+same band — but whether KCOV-reward RL can *exceed* the SFT-2 ceiling is **open (RQ2)**, not closed (the
+200-step run is ~40× shorter than RL-1; see JOURNAL 2026-06-08). Figure: `thesis/figures/saturation.*`.
 
 **Program length is narrow and pinned by the token budget** (canonical bytecode count `len(hex)//16`,
 from `benchmarks/diversity/candidates/`; figure `thesis/figures/depth_collapse.*`, script
