@@ -44,8 +44,10 @@ programs long enough to exercise anything interesting in the verifier.
 
 As a diagnostic only: measured through the pure-Python encoder, SFT-1's syntactic
 accept rate is about 73\% (the frequently-quoted ``60\%'' was an artifact of a
-clang parser that mis-reads verifier register-state lines as instructions). This
-number is not a result. A 73\% accept rate on
+clang parser that mis-reads verifier register-state lines as instructions). Every
+accept-rate and coverage figure in this thesis is taken through the pure-Python
+encoder path; the clang parser that produced the inflated rejection is used
+nowhere in the measurement pipeline. This number is not a result. A 73\% accept rate on
 two-instruction programs discovers nothing, and is recorded only to make the point
 that \emph{validity is not coverage}. SFT-1 answers RQ1 in the narrow,
 prerequisite sense of Chapter~\ref{ch:methodology}: the model acquired BPF syntax,
@@ -56,7 +58,7 @@ not the ability to explore.
 \label{sec:results-rl}
 % --------------------------------------------------------------------------
 
-RL run~1 (\texttt{rl\_grpo\_v2}) used GRPO with $G=4$, $\beta=0.01$, maximum
+RL run~1 used GRPO with $G=4$, $\beta=0.01$, maximum
 completion length 600~tokens, on the local RTX~4070 Laptop GPU, for 8{,}370 steps.
 It did not learn. Cumulative new-PC growth ceased at approximately step~1{,}300 and
 nothing further was discovered in the remaining $\approx$7{,}000 steps
@@ -68,9 +70,7 @@ nothing further was discovered in the remaining $\approx$7{,}000 steps
 Two distinct quantities must be separated. The \emph{total} coverage frontier at
 the end of the run was 1{,}638 distinct PCs, but this includes the
 $\approx$1{,}501 PCs already reached during SFT evaluation; the \emph{incrementally
-new} contribution of RL was only 137 PCs
-(\texttt{results/rl\_analysis\_pcs.csv}; the README's 138 is an off-by-one
-counting artifact). Growth was bursty and brief: no new PCs for the first 97
+new} contribution of RL was only 137 PCs. Growth was bursty and brief: no new PCs for the first 97
 batches, then a series of bursts up to batch~1{,}241, after which only two further
 PCs were ever found (batches 3{,}036 and 4{,}873).
 
@@ -98,15 +98,18 @@ reward spread, then variance returns to zero.
   \label{fig:rl-std}
 \end{figure}
 
-The structural cause was twofold. First, a bug in \texttt{kcov\_validator} returned
-an empty PC list for every REJECTED program, so all rejected completions looked
-identical to the reward function (fixed in commit~\texttt{c8a9d02}). Second, SFT-1
+The cause was the reward's coarse top tier under near-universal acceptance. SFT-1
 was prompted with a \texttt{Status:~VALID} header, and during RL inference it
-produced accepted programs 99.7\% of the time; once the coverage frontier
-saturated, every completion in a group received the same reward. The KCOV bug is
-the primary and sufficient cause of the zero variance; the prompt bias is a
-secondary contributor. The \emph{result} of run~1 is this diagnosis --- not the 137
-PCs it happened to touch.
+produced accepted programs 99.6\% of the time; once the coverage frontier saturated
+at step~$\approx$1{,}300, essentially every completion was an accepted program with
+no new PC, which the v1 reward scores at a flat 0.1, so every completion in a group
+received the same value. A second defect --- \texttt{kcov\_validator} returned an
+empty PC list for every REJECTED program --- was real but immaterial here: at a
+0.3\% rejection rate it touched too few completions to move the batch variance, and
+it becomes load-bearing only in the post-redesign regime where rejection is common
+(Section~\ref{sec:reward-validation}). The prompt-anchored acceptance, not the KCOV
+bug, is the operative cause of run~1's zero variance. The \emph{result} of run~1 is
+this diagnosis --- not the 137 PCs it happened to touch.
 
 % --------------------------------------------------------------------------
 \section{Reward and Format Redesign}
@@ -122,7 +125,7 @@ programs the verifier never accepts, and then the validity-gated soft-floor rewa
 (Equation~\ref{eq:reward-v2}) carried into run~2.
 
 A 100-step comparison run validated the two structural fixes. Removing the
-\texttt{Status:~VALID} header shifted the verdict distribution from 99.7\% accepted
+\texttt{Status:~VALID} header shifted the verdict distribution from 99.6\% accepted
 (run~1) to 11.5\% accepted / 63.2\% rejected / 25.2\% encode-fail, confirming that
 the prompt had anchored generation toward valid programs. Crucially, those rejected
 programs now returned \emph{non-empty} KCOV traces from the fixed binary, so the
@@ -134,7 +137,7 @@ for non-zero $\sigma_r$ in a predominantly-rejected regime.
 \label{sec:results-sft2}
 % --------------------------------------------------------------------------
 
-SFT-2 (\texttt{sft-1epoch-v2}) retrains on the stripped format with
+SFT-2 retrains on the stripped format with
 \texttt{[coverage]}/\texttt{[novelty]} control tokens, for one epoch
 (2{,}408~steps). The capability gain over SFT-1 is real: the model now generates
 \emph{deep} programs --- a median of 30 instructions at a 512-token budget, against
@@ -168,8 +171,7 @@ the model that the diversity experiment and RL run~2 are built on.
 
 RL run~2 trains SFT-2 with the validity-gated soft-floor reward
 (Equation~\ref{eq:reward-v2}), $G=16$, in two phases: a 20-step smoke test
-(phase~A) and a 200-step run with global novelty enabled (phase~B,
-\texttt{bz5ymfzl}).
+(phase~A) and a 200-step run with global novelty enabled (phase~B).
 
 The mechanism result is robust. The reward variance stays alive throughout:
 $\sigma_r$ has mean $0.224$ (range $0.01$--$0.44$) over all 207 steps, against
@@ -177,7 +179,12 @@ run~1's mean $0.001$ with 99\% of batches at exactly zero
 (Figure~\ref{fig:rl-std}). The soft floor structurally guarantees within-group
 variance even at the $\approx7\%$ accept rate, so the gradient starvation that
 halted run~1 \emph{does not recur}. This is a property of the reward design, not a
-trend that could reverse.
+trend that could reverse. Run~2 differs from run~1 in several hyperparameters at
+once ($G$, the prompt format, the SFT base, $\beta$), so the absence of starvation
+is not attributed to the empirical run-to-run comparison; it is attributed to the
+construction proof of Section~\ref{sec:reward-redesign}, which makes $\sigma_r>0$
+hold by design across every group composition the policy can produce. The single
+confounded comparison is consistent with that proof, not a substitute for it.
 
 The coverage result is negative but inconclusive. Cumulative PCs climbed during
 training (4{,}320~$\to$~4{,}836 total PCs, including those from rejected programs
@@ -186,8 +193,9 @@ via the soft floor) but with a clearly decelerating rate
 from \emph{valid} programs --- run~2's checkpoint scores $\approx$3{,}685 (replicate
 range 3{,}606--3{,}833), squarely within the SFT-2 band
 (Section~\ref{sec:diversity-wall}): RL did not push coverage beyond the SFT
-ceiling. Validity nudged upward (from $\approx7.5\%$ to $\approx8.7\%$), consistent
-with the gate but a single under-powered measurement.
+ceiling. The accept rate measured $\approx7.5\%$ before and $\approx8.7\%$ after,
+but on a single under-powered measurement that gap is within run-to-run noise, so
+no directional claim is made about it.
 
 \begin{figure}[ht]
   \centering
@@ -214,46 +222,95 @@ but does not close the question.
 The central finding of this thesis concerns the metric that counts: unique KCOV PCs
 from valid programs. It does not grow with the number of valid programs.
 
-Within a single SFT-2 generation run, increasing the number of valid programs by
-roughly $16\times$ (from~$\approx$80 to~$\approx$1{,}300) raises the cumulative
-count of unique valid PCs by only about $+28\%$
-(Figure~\ref{fig:saturation}). Coverage grows far sub-linearly: the
-thousandth valid program adds almost nothing the first hundred had not already
-reached. The model's valid programs march the same verifier paths.
+Within a single SFT-2 generation run at a \emph{fixed} 1024-token budget,
+increasing the number of valid programs by roughly $16\times$ (from~$\approx$80
+to~$\approx$1{,}300) raises the cumulative count of unique valid PCs by only about
+$+28\%$ (replicate range $+9$ to $+45\%$; Figure~\ref{fig:saturation}). Holding the
+budget fixed is what isolates the variable of interest: the near-flat coverage
+reflects more programs, not longer ones, so it cannot be read as a side effect of a
+budget change. Coverage grows far sub-linearly: the thousandth valid program adds
+almost nothing the first hundred had not already reached. The model's valid programs
+march the same verifier paths.
 
 \begin{figure}[ht]
   \centering
   \includegraphics[width=0.85\textwidth]{figures/saturation.pdf}
-  \caption{Cumulative unique valid PCs versus number of valid programs (SFT-2,
-  three replicates shown as a median line with a min--max band). Coverage rises
-  steeply over the first $\approx$100 valid programs, then flattens. RL-2 (green
-  point, mean $\pm$ replicate range) lands inside the band --- training did not push
-  coverage past the SFT ceiling. The valid-unique-PC metric is nondeterministic
-  ($\pm\sim$12\% at $n\approx1{,}300$); the sub-linear trend is robust across every
-  replicate, the exact percentage is not.}
+  \caption{Cumulative unique valid PCs versus number of valid programs. The band is
+  the median and min--max over three replicates of a single SFT-2 run at a fixed
+  1024-token budget; the 512-token endpoint and RL-2 are shown as separate points.
+  Coverage rises steeply over the first $\approx$100 valid programs, then flattens.
+  RL-2 (green point, mean $\pm$ replicate range) lands inside the band --- training
+  did not push coverage past the SFT ceiling. The valid-unique-PC metric is
+  nondeterministic ($\pm\sim$12\% at $n\approx1{,}300$), a noise quantified in the
+  text; the sub-linear trend is robust across every replicate, the exact percentage
+  is not.}
   \label{fig:saturation}
 \end{figure}
 
-\paragraph{A caveat on the metric.}
-Re-validating the \emph{same} programs gives different unique-PC counts run to run.
-KCOV records every kernel PC touched during the trace, including background
-interrupt and scheduler activity that accumulates with program count, and a few
-borderline verdicts flip on timing. The measured spread is $\pm\sim$1\% at 75 valid
-programs but $\pm\sim$12\% at 1{,}300. For this reason the result is reported as a
-range over replicates and the claim is made on the \emph{sub-linear trend}, which
-holds across every replicate (even the most generous: $16\times$ more programs buy
-at most $1.45\times$ the coverage), never on a single percentage.
+\paragraph{A caveat on the metric: the noise it commits.}
+The unique-PC count carries a measurement noise that must be characterized before
+any percentage is read off the curve, because the error is not the absolute level
+but a random variable injected by kernel activity unrelated to the program. The
+trace is taken over the whole \texttt{BPF\_PROG\_LOAD} path, not the verifier alone
+(Section~\ref{sec:kcov-validator}), and reloading the \emph{same} accepted program
+does not return the same PC set. Measured directly --- a fixed program reloaded a
+few hundred times --- the trace decomposes into a \emph{deterministic core} of
+$\approx$1{,}800--2{,}300 PCs present on every load, and a \emph{random component}
+of $\approx$120$\pm$100 PCs per load (range $\approx$10--320), drawn from a
+$\approx$450-PC pool of background-kernel addresses: allocation, soft-irq, and
+scheduler paths that KCOV records during the load but that say nothing about the
+program. The deterministic core cancels in any comparison and is not the error;
+the random component is. It is independent of program depth --- a two-instruction
+program and a 39-instruction one show the same $\approx$120$\pm$100 spread --- so it
+is a property of the measurement channel, not of what the model generates. This
+noise enters the cumulative-unique curve twice: it perturbs every individual point,
+and because each load contributes a fresh draw from the pool, the cumulative union
+keeps climbing --- by $\approx$200--450 PCs over a few hundred loads --- even for a
+program that never changes. The $\pm\sim$12\% replicate spread at $n\approx1{,}300$
+is exactly this random variable, and at that magnitude it is comparable to the
+$+28\%$ separating the curve's two ends: no single percentage, and no
+between-condition comparison at this effect size, is resolvable above it. What
+\emph{does} survive the noise is the order of magnitude --- $16\times$ more programs
+buy at most $\approx1.45\times$ the unique PCs across every replicate, nowhere near
+the $16\times$ that linear growth would require. The claim is therefore made on the
+\emph{sub-linear trend} alone, never on a single number or a condition-to-condition
+difference.
 
 \paragraph{Mode collapse, and where it originates.}
-The narrow length distribution (Figure~\ref{fig:depth}) and the coverage saturation
-(Figure~\ref{fig:saturation}) are two faces of one phenomenon: the generator has
-collapsed onto a narrow mode of similar programs that traverse overlapping verifier
-paths. Neither scaling validity (RL run~2) nor doubling program length
-(512~$\to$~1024 tokens) escapes it. Critically, both measurements are taken on
-\emph{SFT-2's own generations}, so the wall is a property of the supervised base
-distribution; RL run~2 inherits it rather than creating it. This matches the
+The coverage saturation (Figure~\ref{fig:saturation}) is the load-bearing evidence:
+the model's valid programs march overlapping verifier paths, so unique coverage
+grows far slower than program count. The narrow length distribution
+(Figure~\ref{fig:depth}) is consistent with a collapsed generator but does not
+establish it on its own --- two programs of equal length can walk entirely
+different paths, so length variety is weaker evidence than path variety and is
+reported as corroboration, not proof. Critically, both measurements are taken on
+\emph{SFT-2's own generations}, so the saturation is a property of the supervised
+base distribution; RL run~2 inherits it rather than creating it. This matches the
 diversity- and entropy-collapse documented for GRPO under a scalar reward
-(Section~\ref{sec:rw-rl-code}), and it reframes the open question: breaking the wall may
-require widening the base distribution at the SFT stage, not only reshaping the RL
-reward. Whether a longer, in-regime RL run or an explicitly diversity-preserving
+(Section~\ref{sec:rw-rl-code}), and it reframes the open question: breaking the wall
+may require widening the base distribution at the SFT stage, not only reshaping the
+RL reward. Whether a longer, in-regime RL run or an explicitly diversity-preserving
 objective can exceed the SFT ceiling is the central question left open (RQ2).
+
+\paragraph{What this establishes, and what it does not.}
+Cumulative coverage rises sub-linearly with sample count for \emph{every} fuzzing
+corpus --- the diminishing-returns shape alone is not evidence of a defect. Two
+features make the present saturation load-bearing rather than routine: it sets in
+early (coverage flattens after $\approx$100 valid programs, and $16\times$ more
+programs buy at most $1.45\times$ the unique PCs), and it does not move under
+either intervention meant to break it --- scaling validity (RL run~2) or doubling
+the token budget, neither of which widens the coverage reached. What the experiment
+does \emph{not} contain is a contrastive baseline: a generator known to be diverse,
+or buzzer at an equal program budget, measured on this same harness, would show
+whether a non-collapsed generator escapes the same flattening. Nor is the absolute
+level anchored --- the fraction of the verifier's reachable PCs that $\approx$3{,}685
+represents is not measured, so saturation is not, on these data, distinguished from
+near-exhaustion on absolute grounds; the claim rests on the \emph{relative}
+flattening, not an absolute coverage level. Finally, the saturation curve rests on
+three replicates under a $\pm\sim$12\% nondeterministic metric, so the band is an
+estimate, not a tight bound. The conservative claim the data support is therefore:
+\emph{within this model and this metric}, valid-program coverage saturates, the
+saturation originates at the SFT stage, and neither RL nor longer programs move it.
+The contrastive baseline that would convert ``saturation consistent with mode
+collapse'' into ``mode collapse'' is identified in Section~\ref{sec:future-work}
+and left to future work.
