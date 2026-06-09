@@ -1,0 +1,57 @@
+\chapter{Engineering Notes}
+\label{app:eng-notes}
+
+This appendix records implementation details that are needed to reproduce the
+training runs but are not part of the method or the results. They are collected
+here so that Chapter~\ref{ch:implementation} can stay focused on the components
+that carry the contribution.
+
+% --------------------------------------------------------------------------
+\section{Library Workarounds}
+\label{app:lib-workarounds}
+% --------------------------------------------------------------------------
+
+\textbf{TRL vLLM availability check.}
+In TRL~0.14.0, \texttt{is\_vllm\_available()} returns the two-element tuple
+\texttt{(False, None)}.
+A non-empty tuple is truthy in Python, so the boolean guard inside
+\texttt{GRPOTrainer} treats vLLM as available and attempts to initialise a vLLM
+inference engine, which is not installed in this environment.
+Overriding the helper to return \texttt{False} before the TRL import avoids the
+spurious initialisation:
+\begin{lstlisting}[caption={TRL vLLM check override}]
+import trl.utils.import_utils as _iu
+_iu.is_vllm_available = lambda: False
+\end{lstlisting}
+\texttt{GRPOConfig} additionally sets \texttt{use\_vllm=False}.
+
+\textbf{Transformers KV-cache regression.}
+With \texttt{gradient\_checkpointing} enabled and \texttt{model.train()} active on
+a Qwen2 model under Transformers~5.x, \texttt{Qwen2DecoderLayer} forces
+\texttt{past\_key\_values=None} on every forward pass, including during
+autoregressive generation.
+This disables the KV cache at generation time, so each completion token is
+recomputed over the full sequence length.
+Completions remain correct but generation slows substantially, which matters for a
+loop that samples $G$ completions per prompt at every step.
+A wrapper around \texttt{model.generate} that restores the correct generation-mode
+context for the duration of the call avoids the regression.
+
+% --------------------------------------------------------------------------
+\section{Unattended-Run Tooling}
+\label{app:run-tooling}
+% --------------------------------------------------------------------------
+
+\textbf{Health monitoring.}
+A TRL callback fires once an hour and writes a health summary: an SSH ping to the
+KCOV VM to confirm the reward oracle is reachable, the verdict distribution of the
+last completed batch (ACCEPTED, REJECTED, encode-fail), and the current cumulative
+PC count.
+When training runs against a remote reward server the callback disables itself,
+since the cloud session logs serve the same purpose.
+
+\textbf{Checkpoint resume.}
+A \texttt{--resume} flag scans the checkpoint directory, selects the latest
+checkpoint, and passes it to \texttt{GRPOTrainer} as
+\texttt{resume\_from\_checkpoint}, so restarting after an interruption requires no
+manual checkpoint bookkeeping.

@@ -92,26 +92,32 @@ Internally, the binary executes six steps in sequence.
   \item Serialise \texttt{\{verdict, pcs\}} to JSON and write to stdout.
 \end{enumerate}
 
-\textbf{The bug and its fix.}
-In the version of \texttt{kcov\_validator} used during RL run~1, step~5 was
-conditional:
+\textbf{Unconditional trace collection.}
+KCOV trace collection is unconditional: both ACCEPTED and REJECTED loads return
+the full PC array covering the kernel code paths executed during the load
+attempt.
+This is a requirement of the reward signal, not an incidental choice.
+A verdict-conditional variant --- one that returned an empty trace for rejected
+programs --- would make every rejected program indistinguishable to the reward
+function, since they would all carry the same empty coverage.
+That homogeneity collapses the within-group reward variance GRPO depends on; it
+is the failure mode analysed in Section~\ref{sec:rl-plateau}.
 
-\begin{lstlisting}[caption={Pre-fix code path (pseudocode)}]
-if verdict == ACCEPTED {
-    pcs = readPCs()
-} else {
-    pcs = []
-}
-\end{lstlisting}
-
-This meant that every REJECTED program returned \texttt{pcs:~[]}, making all
-rejected programs appear identical to the GRPO reward function and collapsing
-within-group reward variance to zero, as analysed in
-Section~\ref{sec:rl-plateau}.
-Commit \texttt{c8a9d02} moved \texttt{readPCs()} outside the conditional branch,
-making the KCOV trace collection unconditional.
-Both ACCEPTED and REJECTED programs now return the full PC array covering the
-code paths executed by the verifier during the load attempt.
+\textbf{Coverage scope.}
+The trace records every kernel program counter executed between
+\texttt{KCOV\_ENABLE} and \texttt{KCOV\_DISABLE}, which bracket the whole
+\texttt{BPF\_PROG\_LOAD} system call rather than the verifier alone. It therefore
+includes the surrounding load-path machinery --- argument copy-in, program and map
+allocation, and, for accepted programs, JIT compilation and teardown --- and no
+address-range filter restricts it to the verifier translation unit, in contrast to
+the per-region KCOV filtering syzkaller applies. The PC counts reported in this
+thesis are accordingly \texttt{BPF\_PROG\_LOAD}-path coverage, not verifier-only
+coverage, with two consequences. An accepted program traverses post-verification
+paths that a rejected one never reaches, so the two verdict classes are not measured
+over the same code region. And because part of the load path is exercised by every
+program, the absolute counts carry a roughly constant load-path component on top of
+the verifier paths that actually vary between programs.
+Section~\ref{sec:diversity-wall} states how this bounds the central measurement.
 
 \textbf{VM configuration.}
 The virtual machine runs Debian trixie with a Linux 6.8.0 kernel compiled with
@@ -128,58 +134,23 @@ but provide crash-detection coverage during RL training.
 % --------------------------------------------------------------------------
 
 The GRPO training loop is implemented in \texttt{ml/rl\_grpo.py} using the
-\texttt{GRPOTrainer} class from TRL 0.14.0, pinned at version \texttt{<0.15} to
-ensure API stability.
-Two library-level bugs were encountered and worked around during development.
+\texttt{GRPOTrainer} class from TRL~0.14.0, pinned below version~0.15 for API
+stability.
+At each step the trainer samples $G$ completions per prompt from the current
+policy and scores each one with the KCOV reward function of
+Section~\ref{sec:reward-redesign}: the completion is encoded to bytecode,
+submitted to \texttt{kcov\_validator} over SSH, and converted to a scalar reward
+from the returned verdict and PC trace.
+GRPO then forms group-normalised advantages from the $G$ rewards and applies the
+policy-gradient update.
+The reward function is the loop's only coupling to the kernel; every other part
+of the step is standard policy-gradient training.
 
-\textbf{TRL vLLM check.}
-TRL~0.14.0's \texttt{is\_vllm\_available()} helper function returns a two-element
-tuple \texttt{(False, None)}.
-In Python, a non-empty tuple is truthy, so the boolean guard inside
-\texttt{GRPOTrainer} incorrectly concluded that vLLM was available and attempted
-to initialise a vLLM inference engine, which is not installed in this environment.
-The fix is applied before the TRL import:
-\begin{lstlisting}[caption={TRL vLLM check patch}]
-import trl.utils.import_utils as _iu
-_iu.is_vllm_available = lambda: False
-\end{lstlisting}
-\texttt{GRPOConfig} additionally sets \texttt{use\_vllm=False} as a belt-and-suspenders guard.
-
-\textbf{Transformers KV-cache bug.}
-When \texttt{gradient\_checkpointing} is enabled and \texttt{model.train()} is
-called on a Qwen2 model under Transformers~5.x, the \texttt{Qwen2DecoderLayer}
-forward method forces \texttt{past\_key\_values=None} on every forward pass,
-including during autoregressive generation.
-Setting \texttt{past\_key\_values=None} at generation time disables the KV cache,
-causing each token in the completion to be re-computed from scratch over the full
-sequence length.
-This does not produce incorrect completions but degrades generation speed
-significantly --- a critical issue for a training loop that generates $G$
-completions per prompt at every step.
-The fix is a wrapper function \texttt{\_fixed\_unwrap\_model\_for\_generation} in
-\texttt{rl\_grpo.py} that temporarily restores the correct generation-mode context
-(training flags set appropriately) around each call to \texttt{model.generate}.
-
-\textbf{SanityCheckCallback.}
-Local GPU training runs for many hours without guaranteed supervision.
-A custom TRL callback, \texttt{SanityCheckCallback}, fires every 3\,600 seconds
-and writes a health summary to \texttt{results/sanity\_checks.log} containing:
-the result of an SSH ping to the KCOV VM (to confirm the reward oracle is
-reachable), a breakdown of the verdict distribution in the last completed batch
-(how many ACCEPTED, REJECTED, and encode-fail programs), and the current
-cumulative PC count.
-When the \texttt{--remote-reward-url} flag is set --- indicating that training is
-running on Colab with a remote reward server --- the callback disables itself,
-since cloud session logs serve the same monitoring purpose.
-
-\textbf{Auto-resume.}
-Long training runs can be interrupted by power events, GPU errors, or SSH
-instability.
-The \texttt{--resume} flag causes the trainer to scan the checkpoint output
-directory, identify the latest saved checkpoint, and pass it to
-\texttt{GRPOTrainer} as the \texttt{resume\_from\_checkpoint} argument.
-This makes restart after an interruption a one-flag operation with no manual
-checkpoint bookkeeping.
+Making this loop run reliably required two library-level workarounds --- a
+TRL/vLLM availability check and a Transformers KV-cache regression --- and long
+unattended runs are guarded by run-monitoring and checkpoint-resume tooling.
+These are reproduction details rather than part of the method; they are recorded
+in Appendix~\ref{app:eng-notes}.
 
 % --------------------------------------------------------------------------
 \section{Remote Reward Pipeline}
@@ -197,12 +168,9 @@ bridge.
 \texttt{tools/reward\_server.py} is a FastAPI server wrapping \texttt{ml/reward.py}.
 It accepts a batch of completions, invokes the reward function --- which calls
 \texttt{kcov\_validator} over SSH --- for each, and returns the scalar rewards. A
-pre-shared API key guards the endpoint. The trainer reaches the server over a
-tunnel (an ngrok static domain), passed via the \texttt{--remote-reward-url} flag;
-the specific tunnel provider is an implementation detail, not part of the
-contribution. The \texttt{ml/train\_grpo\_colab.ipynb} notebook orchestrates the
-cloud side and resumes from a checkpoint when one is present. HTTP calls are
-wrapped in an exponential-backoff retry loop, and the trainer aborts cleanly rather
-than training on missing rewards if the server stays unreachable.
+pre-shared API key guards the endpoint, and the trainer reaches the server over an
+ngrok tunnel passed via the \texttt{--remote-reward-url} flag. If the server stays
+unreachable the trainer aborts rather than training on missing rewards, so a
+network failure cannot silently corrupt the policy.
 
 This pipeline carried RL run~2 (Chapter~\ref{ch:results}).
