@@ -22,30 +22,38 @@ The BPF instruction struct layout is:
 \end{center}
 totalling 8 bytes per instruction, packed little-endian.
 
-The encoder processes each line of verifier-log assembly in three steps.
-First, it extracts the two-hex-digit opcode byte from the parenthesised field
-\texttt{(XX)} that the verifier log prints on every instruction line.
-Second, it parses the instruction text to the right of \texttt{(XX)}: the
-destination register, source register (where present), 16-bit signed offset,
-and 32-bit signed immediate value are extracted by a set of regex patterns, one
-per BPF instruction class (ALU, JMP, LD, ST, CALL, EXIT).
-Third, it packs the four fields into the 8-byte struct using Python's
-\texttt{struct.pack} with the little-endian format specifier.
+The encoder processes each line of model output in three steps.
+First, it normalises the line: the instruction index \texttt{N:}, the parenthesised
+opcode byte \texttt{(XX)}, register-state annotations, and comment suffixes are
+stripped, leaving the bare mnemonic text.
+Second, it infers the instruction from that mnemonic. A priority-ordered set of
+regular expressions, one per BPF instruction class (ALU, JMP, LD/ST, CALL, EXIT),
+matches the mnemonic and looks the opcode up in a class-keyed table; the
+destination register, source register (where present), 16-bit signed offset, and
+32-bit signed immediate are read from the same match.
+Third, it packs the opcode and the four operand fields into the 8-byte struct
+using Python's \texttt{struct.pack} with the little-endian format specifier.
+The opcode byte the verifier log prints is not consumed: it is stripped in the first
+step and re-derived from the mnemonic in the second, so the encoder depends only on
+the textual mnemonic, not on the log's opcode annotation.
 
-Using the opcode byte from the verifier log rather than re-deriving it from the
-mnemonic has one important consequence for fuzzing: unusual instruction sequences
---- unconventional register assignments, non-standard immediate values, opcode
-bytes that clang would never emit --- pass through the encoder unchanged and
-reach the verifier as-is.
-A clang-based assembler would reject or normalise many of these sequences before
-they ever reached the kernel; the pure-Python encoder imposes no such filter,
-maximising the diversity of programs that the verifier actually processes.
+Re-deriving the instruction from the mnemonic rather than invoking an assembler has
+a mixed consequence for fuzzing. On one side the encoder applies no clang-style
+validity check to operands: unconventional register assignments, out-of-range
+immediates, and odd offsets within a recognised instruction form pass through
+unchanged and reach the verifier as-is, where a clang-based assembler would reject or
+normalise many of them. On the other side the encoder is itself a filter on the
+opcode space --- it can only emit opcodes present in its per-class tables, so a
+mnemonic outside those tables, or a line it cannot parse, is silently dropped rather
+than passed through. The diversity the encoder preserves is therefore in the operands
+of recognised instructions, not in arbitrary opcode bytes.
 
-If any line of model output cannot be parsed --- because the model generated text
-that does not conform to the verifier-log format --- the encoder raises a
-\texttt{ParseError} exception that is caught by the reward function and mapped to
-a reward of~0.0, signalling an encode failure to GRPO without crashing the
-training loop.
+A line the encoder cannot parse is skipped, not fatal, so a single malformed line
+does not discard an otherwise-valid program. An encode failure is declared only when
+\emph{no} line parses: the encoder then returns no bytecode and the reward function
+maps the empty result to a reward of~0.0, signalling the failure to GRPO without
+crashing the training loop. When the parsed program does not already end in
+\texttt{exit}, the encoder appends one so the bytecode is well-formed for loading.
 
 The encoder is tested by 36 unit tests in
 \texttt{tests/test\_reward\_encoder.py}.
@@ -118,6 +126,15 @@ over the same code region. And because part of the load path is exercised by eve
 program, the absolute counts carry a roughly constant load-path component on top of
 the verifier paths that actually vary between programs.
 Section~\ref{sec:diversity-wall} states how this bounds the central measurement.
+
+The same scope reaches the RL reward, not only the offline measurement. The novelty
+terms of Section~\ref{sec:reward-redesign} credit any rarely-visited PC, so a program
+can earn novelty for background-kernel addresses --- allocation, soft-irq, and
+scheduler paths --- that the noise characterization of
+Section~\ref{sec:diversity-wall} shows vary independently of the program. The
+exploration signal is contaminated to that extent. Restricting the trace to the
+verifier translation unit with a per-region address filter would remove the
+contamination and is left to future work (Section~\ref{sec:future-work}).
 
 \textbf{VM configuration.}
 The virtual machine runs Debian trixie with a Linux 6.8.0 kernel compiled with

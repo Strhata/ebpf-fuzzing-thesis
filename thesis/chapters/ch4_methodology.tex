@@ -153,10 +153,10 @@ an absolute bytecode offset does not.
 Two further practical advantages reinforce the choice.
 The verifier-log format is the exact output of buzzer's data extraction path,
 requiring no intermediate conversion at training time.
-And because the format includes the opcode byte \texttt{(XX)} explicitly, the
-pure-Python encoder described in Chapter~\ref{ch:implementation} can reconstruct
-the raw bytecode from model output deterministically, without depending on an
-assembler or a clang installation.
+And the format's mnemonics are regular enough to parse with a small per-class
+pattern set, so the pure-Python encoder described in Chapter~\ref{ch:implementation}
+can reconstruct the raw bytecode from model output deterministically, without
+depending on an assembler or a clang installation.
 
 An example of the format as it appears in model output is:
 

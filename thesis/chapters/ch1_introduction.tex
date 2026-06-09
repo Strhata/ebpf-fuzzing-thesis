@@ -122,8 +122,9 @@ This thesis makes the following three contributions:
         batches, zeroing the gradient~\cite{grpo-starvation}. We trace the cause to a
         homogeneous reward --- a prompt-anchored policy that, once the coverage
         frontier saturates, scores every completion alike --- and fix it with a
-        reward redesign that guarantees non-zero within-group variance by
-        construction: a per-program novelty term separates otherwise-equal accepted
+        reward redesign that keeps within-group variance non-zero across the group
+        compositions the policy produces in practice: a per-program novelty term
+        separates otherwise-equal accepted
         programs, and a \emph{validity-gated soft floor} grants rejected programs
         graded partial credit, while accepted programs always score strictly higher
         so the policy is still driven toward validity. A second run confirms the

@@ -22,8 +22,7 @@ generator; a GRPO stage rewards it with live KCOV coverage; and a Go binary insi
 a KCOV-instrumented Linux~6.8 VM validates each program and returns its PC trace.
 The central engineering obstacle --- bridging LLM text to the raw 8-byte BPF
 instruction structs the kernel requires --- is solved by a pure-Python encoder that
-reads the opcode byte directly from the verifier-log format and needs no clang at
-inference time. The scaffolding is modular: retargeting to another kernel
+re-derives each instruction from its mnemonic and needs no clang at inference time. The scaffolding is modular: retargeting to another kernel
 subsystem requires only new training data and a new reward.
 
 \textbf{The diversity wall: a characterized negative result.}
