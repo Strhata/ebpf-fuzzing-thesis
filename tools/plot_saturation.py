@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -44,12 +45,21 @@ def main() -> None:
     data = json.loads(Path(args.cache).read_text())
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
-    # Main series: every replicate's cumulative curve (band = nondeterminism).
-    for j, rep in enumerate(data.get(_MAIN, [])):
-        xs = [n for n, _ in rep["curve"]]
-        ys = [u for _, u in rep["curve"]]
-        ax.plot(xs, ys, color=_COLORS[_MAIN], lw=1.2, alpha=0.55,
-                label=_MAIN if j == 0 else None)
+    # Main series: median curve + shaded min-max band across replicates. The raw
+    # replicate curves use slightly different x-points (n_valid varies), so each is
+    # interpolated onto a shared log grid before taking the per-x min/median/max.
+    reps = data.get(_MAIN, [])
+    if reps:
+        n_min = min(rep["curve"][-1][0] for rep in reps)
+        grid = np.unique(np.logspace(0, np.log10(n_min), 200).astype(int))
+        stack = np.vstack([
+            np.interp(grid, [n for n, _ in rep["curve"]], [u for _, u in rep["curve"]])
+            for rep in reps
+        ])
+        c = _COLORS[_MAIN]
+        ax.fill_between(grid, stack.min(0), stack.max(0), color=c, alpha=0.25,
+                        label=f"{_MAIN} (min–max, {len(reps)} reps)")
+        ax.plot(grid, np.median(stack, 0), color=c, lw=1.8, label=f"{_MAIN} (median)")
 
     # Other series: endpoint with min–max bar across replicates.
     for label, reps in data.items():
