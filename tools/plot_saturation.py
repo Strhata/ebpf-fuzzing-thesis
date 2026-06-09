@@ -61,14 +61,16 @@ def main() -> None:
                         label=f"{_MAIN} (min–max, {len(reps)} reps)")
         ax.plot(grid, np.median(stack, 0), color=c, lw=1.8, label=f"{_MAIN} (median)")
 
-    # Other series: endpoint with min–max bar across replicates.
-    for label, reps in data.items():
-        if label == _MAIN or not reps:
-            continue
-        nv = _mean([r["n_valid"] for r in reps])
-        eps = [r["endpoint"] for r in reps]
+    # Only RL-2 is overlaid: it is in the same regime as the main (1024-tok) curve,
+    # so "does it land in the band?" is a fair question. The 512-tok SFT-2 run is
+    # NOT overlaid — plotting it here would conflate token budget with program count.
+    rl = data.get("RL-2 phase-B cp200", [])
+    if rl:
+        nv = _mean([r["n_valid"] for r in rl])
+        eps = [r["endpoint"] for r in rl]
         ax.errorbar([nv], [_mean(eps)], yerr=[[_mean(eps) - min(eps)], [max(eps) - _mean(eps)]],
-                    fmt="o", ms=6, capsize=4, color=_COLORS.get(label, "#666"), label=label)
+                    fmt="o", ms=7, capsize=4, color=_COLORS["RL-2 phase-B cp200"],
+                    label="RL-2 (does not exceed the SFT band)")
 
     ax.set_xscale("log")
     ax.set_xlabel("number of valid programs (log scale)")
