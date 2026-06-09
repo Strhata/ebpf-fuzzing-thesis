@@ -225,9 +225,10 @@ reached. The model's valid programs march the same verifier paths.
   \centering
   \includegraphics[width=0.85\textwidth]{figures/saturation.pdf}
   \caption{Cumulative unique valid PCs versus number of valid programs (SFT-2,
-  three replicates shown as a band). Coverage rises steeply over the first
-  $\approx$100 programs, then flattens. RL-2 (green) and the 512-token SFT-2 run
-  (blue) sit in the same band. The valid-unique-PC metric is nondeterministic
+  three replicates shown as a median line with a min--max band). Coverage rises
+  steeply over the first $\approx$100 valid programs, then flattens. RL-2 (green
+  point, mean $\pm$ replicate range) lands inside the band --- training did not push
+  coverage past the SFT ceiling. The valid-unique-PC metric is nondeterministic
   ($\pm\sim$12\% at $n\approx1{,}300$); the sub-linear trend is robust across every
   replicate, the exact percentage is not.}
   \label{fig:saturation}
