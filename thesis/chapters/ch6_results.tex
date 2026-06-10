@@ -94,7 +94,9 @@ reward spread, then variance returns to zero.
   (RL-1):} $\sigma_r$ is exactly zero in 99.5\% of batches (mean $0.001$) --- the
   gradient starves. \textbf{Right (RL-2 phase~B):} the validity-gated soft-floor
   reward keeps $\sigma_r$ alive (mean $0.224$, range $0.01$--$0.44$), never
-  sustained-zero. Source: WandB runs \texttt{hapj9sah}, \texttt{bz5ymfzl}.}
+  sustained-zero. Source: RL-1 from WandB run \texttt{hapj9sah}; RL-2 from the
+  exported step history \texttt{results/rl2\_phaseB\_history.csv} (WandB run
+  \texttt{bz5ymfzl}, \texttt{reward/std} column).}
   \label{fig:rl-std}
 \end{figure}
 

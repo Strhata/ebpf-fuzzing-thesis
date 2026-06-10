@@ -44,7 +44,10 @@ harness --- that would separate this both from ordinary diminishing returns and 
 faithful imitation of buzzer's narrow two-strategy corpus, and so convert the
 characterization into a proof; that comparison is the natural next experiment
 (Section~\ref{sec:future-work}). A characterized negative result with an identified
-mechanism is the central empirical contribution of this thesis.
+mechanism is the central empirical contribution of this thesis. No verifier defect
+surfaced over the course of the work; the only crashes recorded --- during corpus
+collection --- were the data-collection fuzzer killed for exhausting host memory, not
+verifier faults.
 
 \textbf{GRPO gradient starvation: diagnosis and a structural fix.}
 RL run~1 stalled completely: the within-group reward standard deviation $\sigma_r$

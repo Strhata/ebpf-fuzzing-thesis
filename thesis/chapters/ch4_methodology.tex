@@ -120,6 +120,38 @@ The dataset is split 90/10 for training and evaluation.
 It is published on HuggingFace as \texttt{Strhata/ebpf-corpus} and serves as the
 SFT training corpus for this thesis.
 
+\subsection{Coverage Enrichment and Control Tokens}
+\label{sec:enrichment}
+
+The curated corpus pairs each program with a verifier verdict but carries no signal
+about \emph{which} verifier paths a program exercises --- the quantity the fuzzing
+objective ultimately optimises. A second pass enriches the corpus with that signal so
+it can later condition generation directly.
+
+Each of the 27\,514 programs is replayed through the KCOV-instrumented validator ---
+the same coverage oracle the reinforcement-learning reward uses
+(Chapter~\ref{ch:implementation}) --- recording \texttt{pc\_count}, the number of
+distinct kernel program counters its load traverses. Two derived labels summarise this
+trace. A \emph{coverage} label bins \texttt{pc\_count} into low/medium/high tertiles. A
+\emph{novelty} label instead scores how \emph{rare} a program's paths are across the
+corpus: writing $\mathrm{freq}[p]$ for the number of programs whose trace contains PC
+$p$ and $N$ for the number of traced programs, a program's novelty is the mean of
+$1-\mathrm{freq}[p]/N$ over its own PCs, so a program that walks paths few others reach
+scores high regardless of how many PCs it touches. Novelty is likewise binned into
+tertiles. The novelty construct here is the offline counterpart of the persistent
+novelty term the RL reward computes online (Chapter~\ref{ch:methodology},
+Section~\ref{sec:reward-redesign}).
+
+The two tertile labels are prepended to each training example as control tokens,
+\texttt{[coverage=\{low,med,high\}]} and \texttt{[novelty=\{low,med,high\}]}, so that
+generation can be steered at inference time by conditioning on the desired token
+values. The conditioning is effective rather than ornamental: holding the model fixed,
+a \texttt{[coverage=high][novelty=high]} prompt shifts the generated verdict and
+length distribution measurably against a neutral prompt. The enrichment is implemented
+in \texttt{ml/enrich\_dataset.py}; because it requires a live KCOV trace of every
+sample, it depends on the same instrumented virtual machine as the reward oracle, not
+on the static corpus alone.
+
 \subsection{Representation: Assembly Format vs.\ Raw Bytecode}
 \label{sec:format-decision}
 
