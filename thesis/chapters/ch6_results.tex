@@ -139,9 +139,18 @@ for non-zero $\sigma_r$ in a predominantly-rejected regime.
 \label{sec:results-sft2}
 % --------------------------------------------------------------------------
 
-SFT-2 retrains on the stripped format with
+SFT-2 retrains Qwen2.5-Coder-1.5B on the enriched, stripped-format corpus with
 \texttt{[coverage]}/\texttt{[novelty]} control tokens, for one epoch
-(2{,}408~steps). The capability gain over SFT-1 is real: the model now generates
+(2{,}408~gradient steps), effective batch size~8 via gradient accumulation, maximum
+sequence length 2{,}048~tokens, BF16 with paged 8-bit AdamW and gradient
+checkpointing, evaluating every 1{,}000 steps. It departs from SFT-1
+(Section~\ref{sec:sft-training}) in three deliberate ways: the learning rate is
+lowered to $5\times10^{-5}$ on a cosine schedule, because SFT-1's
+$2\times10^{-4}$ plateaued the loss before convergence; the LoRA adapters
+(rank~16, $\alpha=32$) are extended to the MLP projections --- gate, up, and down ---
+in addition to the attention Q/K/V/O; and the sequence budget is raised from 768 to
+2{,}048~tokens to admit the longer programs the stripped format now permits.
+The capability gain over SFT-1 is real: the model now generates
 \emph{deep} programs --- a median of 30 instructions at a 512-token budget, against
 SFT-1's one or two (Figure~\ref{fig:depth}). These are programs long enough to
 exercise the verifier's analysis.

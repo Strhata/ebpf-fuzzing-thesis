@@ -116,7 +116,7 @@ distribution that the SFT objective asks it to learn.
 
 The final dataset contains 27\,514 examples: 13\,153 valid programs and 14\,361
 invalid programs spread across the 26 error classes.
-The dataset is split 90/10 for training and evaluation.
+For SFT-1 the dataset is split 90/10 into training and evaluation.
 It is published on HuggingFace as \texttt{Strhata/ebpf-corpus} and serves as the
 SFT training corpus for this thesis.
 
@@ -151,6 +151,14 @@ length distribution measurably against a neutral prompt. The enrichment is imple
 in \texttt{ml/enrich\_dataset.py}; because it requires a live KCOV trace of every
 sample, it depends on the same instrumented virtual machine as the reward oracle, not
 on the static corpus alone.
+
+The enriched corpus is split 70/15/15 into training, validation, and test sets,
+stratified by verifier verdict (seed~42). The 15\% test split is frozen to disk
+before any training begins and held in reserve; SFT-2 is trained and validated on the
+remaining 85\%, and the frozen test set is not used for model selection or scored in
+this thesis. (This differs from SFT-1's simpler 90/10 train/evaluation split,
+Section~\ref{sec:dataset}, because the enriched corpus supports a held-out test set
+the earlier corpus did not reserve.)
 
 \subsection{Representation: Assembly Format vs.\ Raw Bytecode}
 \label{sec:format-decision}
