@@ -308,6 +308,36 @@ may require widening the base distribution at the SFT stage, not only reshaping 
 RL reward. Whether a longer, in-regime RL run or an explicitly diversity-preserving
 objective can exceed the SFT ceiling is the central question left open (RQ2).
 
+\paragraph{A preliminary contrastive cut: buzzer at an equal budget.}
+A coverage race against buzzer --- the generator that produced the SFT corpus ---
+gives a first, though confounded, external reference point
+(Figure~\ref{fig:race}). At an equal submission budget of ${\sim}500$ programs,
+buzzer's cumulative unique PCs ($4{,}915$) exceed the model's ($3{,}799$ over all
+programs, $3{,}460$ from valid programs alone), and buzzer reaches that coverage with
+far fewer accepted programs ($23$ against the model's $92$). A generator that is not
+collapsed thus reaches more of the verifier at the same budget --- the pattern
+expected of a model that has collapsed \emph{below} its teacher rather than one
+faithfully imitating an already-narrow teacher. The comparison is not clean: buzzer
+records coverage through its own in-process KCOV path while the model is scored
+through the \texttt{kcov\_validator} oracle, and both were run once. Both paths
+bracket KCOV around the \texttt{BPF\_PROG\_LOAD} call, so the quantities are
+comparable in kind, but the differing collection setups and the single run make this
+a confounded cut, not the controlled same-harness baseline. It is read as suggestive
+evidence, not proof.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/coverage_race.pdf}
+  \caption{Coverage race at an equal ${\sim}500$-program budget: cumulative unique
+  kernel PCs for buzzer (logged through its own KCOV path) and SFT-2 (scored through
+  \texttt{kcov\_validator}). Buzzer reaches $4{,}915$ PCs with $23$ valid programs;
+  SFT-2 reaches $3{,}799$ over all programs ($3{,}460$ from valid programs) with $92$
+  valid. The two sides use different coverage-collection paths and were each run once,
+  so the comparison is confounded --- suggestive of the model under-covering its
+  teacher, not a controlled same-harness result.}
+  \label{fig:race}
+\end{figure}
+
 \paragraph{What this establishes, and what it does not.}
 Cumulative coverage rises sub-linearly with sample count for \emph{every} fuzzing
 corpus --- the diminishing-returns shape alone is not evidence of a defect. Two
@@ -316,9 +346,10 @@ early (coverage flattens after $\approx$100 valid programs, and $16\times$ more
 programs buy at most $1.45\times$ the unique PCs), and it does not move under
 either intervention meant to break it --- scaling validity (RL run~2) or doubling
 the token budget, neither of which widens the coverage reached. What the experiment
-does \emph{not} contain is a contrastive baseline: a generator known to be diverse,
-or buzzer at an equal program budget, measured on this same harness, would show
-whether a non-collapsed generator escapes the same flattening. Nor is the absolute
+does \emph{not} yet contain is a \emph{clean} contrastive baseline: the buzzer race
+above points the right way but is confounded by its separate coverage path and single
+run, so a diverse generator measured on this \emph{exact} harness is still needed to
+settle whether a non-collapsed generator escapes the same flattening. Nor is the absolute
 level anchored --- the fraction of the verifier's reachable PCs that $\approx$3{,}685
 represents is not measured, so saturation is not, on these data, distinguished from
 near-exhaustion on absolute grounds; the claim rests on the \emph{relative}
@@ -327,9 +358,10 @@ flattening, not an absolute coverage level. Two further confounds bear on the
 entirely from buzzer's two hand-written strategies
 (Section~\ref{sec:buzzer-data}), so a narrow generation mode is equally consistent
 with a generator that collapsed \emph{below} its teacher and with one that faithfully
-imitates an already-narrow teacher; separating the two requires measuring buzzer's
-own path diversity on this harness --- the same contrastive baseline identified
-above. And the measurement pipeline itself filters toward uniformity before coverage
+imitates an already-narrow teacher; the buzzer race above is a first measurement of
+the teacher's own path diversity and points to the former --- buzzer reaches more
+coverage at equal budget --- but its harness confound keeps it from settling the
+question. And the measurement pipeline itself filters toward uniformity before coverage
 is read: the reward's 15-instruction floor, the encoder's silent dropping of
 unparseable lines (Section~\ref{sec:encoder}), and generations that run to the token
 cap together admit only programs of a certain length and syntax, so part of the
@@ -339,6 +371,7 @@ $\pm\sim$12\% nondeterministic metric, so the band is an estimate, not a tight b
 The conservative claim the data support is therefore:
 \emph{within this model and this metric}, valid-program coverage saturates, the
 saturation originates at the SFT stage, and neither RL nor longer programs move it.
-The contrastive baseline that would convert ``saturation consistent with mode
-collapse'' into ``mode collapse'' is identified in Section~\ref{sec:future-work}
-and left to future work.
+A first, confounded cut at the contrastive baseline --- the buzzer race above ---
+already points toward mode collapse; the \emph{clean} same-harness comparison that
+would convert ``consistent with mode collapse'' into a settled finding remains future
+work (Section~\ref{sec:future-work}).

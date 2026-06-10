@@ -38,11 +38,14 @@ Because these measurements are taken on the supervised model's own generations, 
 collapse \emph{originates at the SFT base distribution}; the RL stage inherits it.
 Sub-linear coverage growth is the universal shape of a fuzzing corpus; what makes it
 load-bearing here is that it sets in early, resists both interventions meant to
-break it, and originates upstream of the RL stage. The experiment lacks a
-contrastive baseline --- a diverse generator, or buzzer at equal budget on this
-harness --- that would separate this both from ordinary diminishing returns and from
-faithful imitation of buzzer's narrow two-strategy corpus, and so convert the
-characterization into a proof; that comparison is the natural next experiment
+break it, and originates upstream of the RL stage. A first, confounded cut at the
+missing contrastive baseline --- a coverage race against buzzer at an equal program
+budget (Chapter~\ref{ch:results}) --- already points toward mode collapse, with
+buzzer reaching more of the verifier at the same budget; but its separate coverage
+path and single run keep it from separating genuine collapse from ordinary
+diminishing returns or faithful imitation of buzzer's narrow two-strategy corpus, and
+so from converting the characterization into a proof. The \emph{clean}, same-harness
+version of that comparison is the natural next experiment
 (Section~\ref{sec:future-work}). A characterized negative result with an identified
 mechanism is the central empirical contribution of this thesis. No verifier defect
 surfaced over the course of the work; the only crashes recorded --- during corpus
@@ -134,7 +137,8 @@ thesis directly motivates to the deeper changes its central finding points to.
 
 \end{enumerate}
 
-A direct buzzer-versus-LLM coverage comparison at equal budget is a natural
-evaluation once the wall is broken; until the generator explores diversely, such a
-comparison would only restate the present finding, and is therefore deferred rather
-than presented as a result.
+A \emph{clean} same-harness buzzer-versus-LLM coverage comparison --- buzzer driven
+through the same \texttt{kcov\_validator} oracle as the model, at an equal budget ---
+would settle whether the model under-covers its teacher. The confounded race reported
+in Chapter~\ref{ch:results} already points that way; a single-harness rerun is the
+natural confirmation, and the cheapest of the experiments listed here.
