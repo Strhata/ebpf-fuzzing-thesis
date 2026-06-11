@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-plot_depth_collapse.py — F1: SFT-2 program-length distribution (mode collapse).
+plot_depth_collapse.py — F1: SFT-2 program-length distribution.
 
 Reads the saved diversity candidates and plots the instruction-count histogram at
-each generation budget. The point of the figure: program length is *narrow and
-pinned by the token budget* — the model does not vary it. Instruction count is the
-canonical bytecode count (len(hex)//16), not assembly-line counting.
+each generation budget. The point of the figure: program length is set by the token
+budget — doubling the budget roughly doubles the median, because the model runs to
+the cap. Instruction count is the canonical bytecode count (len(hex)//16), not
+assembly-line counting.
 
 No VM, no GPU: pure re-analysis of committed candidate JSONLs.
 
@@ -77,18 +78,17 @@ def main() -> None:
             continue
         counts = load_counts(path)
         print(describe(label, counts))
-        mean, sd = st.mean(counts), st.pstdev(counts)
+        median = st.median(counts)
         # Fraction of programs (weights=1/n): the two series have very different N
-        # (1k vs 20k), so raw counts would misrepresent the spread. Normalising lets
-        # the shapes be compared directly — both are tight, just budget-shifted.
+        # (1k vs 20k), so raw counts would misrepresent the relative shapes.
         weights = [1.0 / len(counts)] * len(counts)
         ax.hist(counts, bins=range(0, 105, 2), alpha=0.6, color=color, weights=weights,
-                label=f"{label}: mean {mean:.0f} ±{sd:.0f}")
-        ax.axvline(mean, color=color, ls="--", lw=1)
+                label=f"{label}: median {median:.0f}")
+        ax.axvline(median, color=color, ls="--", lw=1)
 
     ax.set_xlabel("program length (BPF instructions)")
     ax.set_ylabel("fraction of generated programs")
-    ax.set_title("SFT-2 program length: narrow, and pinned by the token budget")
+    ax.set_title("SFT-2 program length is set by the token budget")
     ax.legend()
     fig.tight_layout()
 
