@@ -75,7 +75,7 @@ def main() -> None:
     ax.set_xscale("log")
     ax.set_xlabel("number of valid programs (log scale)")
     ax.set_ylabel("cumulative unique PCs from valid programs")
-    ax.set_title("Valid-program coverage saturates (diversity is the wall)")
+    ax.set_title("Valid-program coverage saturates with sample count")
     ax.legend()
     fig.tight_layout()
 

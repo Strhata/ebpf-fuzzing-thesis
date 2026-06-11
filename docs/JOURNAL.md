@@ -189,3 +189,12 @@ than the corpus. Softened ch7 "accounts for" → "is enough to produce" (coupon-
 sole cause). Measured artifacts the thesis rests on, for the record: the dataset/corpus; the buzzer
 generation + coverage race; the benchmarks; the 20k SFT-v2 (1-epoch) saturation sample; the ~5k RL-v2
 (cp200, brief) sample. Builds clean.
+
+## 2026-06-11 — exam slide deck + figure/title cleanup
+Built the cybersecurity-exam deck (PRD #38, issues #39–#43) under `slides/exam-deck/` (gitignored;
+HTML/CSS + Playwright → `deck.pdf`, 11 slides + 1 backup, Italian). Ran the #44 fact-gate: every
+number on every slide traces to FACTS/committed data — PASS. Two doc fixes fell out of it:
+(1) retitled `tools/plot_saturation.py` F2 to "Valid-program coverage saturates with sample count" —
+the old title baked the cut phrase "diversity is the wall"; regenerated `thesis/figures/saturation.{png,pdf}`.
+(2) recorded the buzzer-vs-LLM coverage-race headline numbers (buzzer 4,915 / SFT-2 3,799 all / 3,460
+valid) in FACTS — they previously lived only in the figure + `data/corpus/*_coverage.csv`.

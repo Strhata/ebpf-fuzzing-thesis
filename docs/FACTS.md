@@ -162,6 +162,12 @@ show validity ≠ coverage (73 valid programs → only ~2,700 unique PCs).
 > `avg_pcs` in benchmark JSON (the "~254k") is **raw KCOV trace length** (every PC hit, loops
 > included), **not** coverage. Always use the *distinct* / *valid-unique* figures above.
 
+**Buzzer-vs-LLM coverage race (confounded — different harnesses; do not headline as a head-to-head).**
+At ~500 programs submitted: **buzzer 4,915** unique kernel PCs (499 submitted), **SFT-2 3,799** (all
+programs, 500 submitted), **SFT-2 3,460** (valid-only). Same order of magnitude; the comparison is
+confounded by harness differences (see JOURNAL 2026-06-03). Source: `data/corpus/{buzzer,model}_coverage.csv`,
+figure `thesis/figures/coverage_race.*`.
+
 ---
 
 ## 6. Dataset
