@@ -134,3 +134,58 @@ Ran grill-me → to-prd → to-issues on the thesis rewrite. Artifacts in gitign
 `.scratch/thesis-revision/` (`PRD.md`, `issues-draft.md`): 10 vertical slices in 3 milestones
 (Evidence → Narrative → Propagation), critical path 04→05→06→07. F1 depth-collapse figure +
 `tools/figures_lib.py` landed first (commit `752a509`).
+
+## 2026-06-10 — thesis reframed to evidence-only: dropped "mode collapse" / "diversity wall" as claims
+Decision (user): the thesis must claim only what a measurement directly backs. Removed the interpretive
+layer — "mode collapse", "the diversity wall" as a named central finding, "the generator collapses onto a
+narrow mode / below its teacher", and the length-"spread"/CV framing (the only measurable length fact is
+that doubling the token budget scales the median 30→58 because the model never emits a terminating `exit`;
+spread/CV carried no meaning). **Kept** as the solid findings: (1) gradient starvation (σ_r=0 → zero
+gradient) — measured, diagnosed, fixed; (2) the SFT-1→SFT-2 capability jump (trivial 1–2 instr → deep
+valid programs) reframed as the positive result it is. The coverage saturation and the buzzer race are now
+reported as bare measurements with **no mechanism claimed** (no clean same-harness baseline was run, so
+cause is undetermined). RQ2 open = RL too short (≈200 vs 8,370 steps), not "a wall".
+Edited: `abstract.tex` (IT+EN), `ch1` (contribution #2 + structure), `ch4` (RQ3 + reward-redesign ref),
+`ch6` (§"Coverage Versus Sample Count" replaces "The Diversity Wall"; SFT-2 §retitled; depth caption),
+`ch7` (summary, contribution #2, RQ3, future work). FACTS §1 + SFT-2 row updated. Thesis builds clean.
+**Also fixed a provenance bug:** ch7 had attributed the `crashes.csv` OOM kills to "corpus collection";
+they are actually from the early 3-VM exploration swarm (`fuzzing/exploration/start_swarm.sh`), not the
+single-VM Docker collection pipeline — corrected to "early exploration phase". (cf. data-artifact-provenance.)
+Verdict on early-buzzer material: `fuzzing/exploration/` swarm scripts add nothing to the argument and stay
+out of the thesis (correct as-is); vendored `fuzzing/buzzer/` is upstream Google code, only `ffi.go` (~50 lines)
+is ours; `fuzzing/buzzer-coverage-race/` is used (the confounded race).
+
+## 2026-06-11 — CovRL paragraph corrected; "diversity wall" purged; design-wager framing added
+Rewrote ch3 CovRL paragraph: dropped "structurally identical". Now frames the shared paradigm + the
+load-bearing difference = CovRL **mutates an explicit seed corpus** vs this work **generates from a learned
+distribution** (the corpus held implicitly in the model's weights, RL standing in for mutation). Cited
+CovRL's 48 bugs / 11 CVEs as the warrant the paradigm finds defects. PPO-vs-GRPO demoted to a one-clause
+aside (token- vs program-level reward weighting), explicitly "not the difference that bears on the results"
+— author considers the algorithm name not load-bearing right now. Added the same **corpus-in-the-weights
+wager** to ch7 Limitations §"samples not searches" so ch3 and ch7 align (and ch6 forward-refs it). Renamed
+the LaTeX label `sec:diversity-wall` → `sec:coverage-scaling` across ch5/ch6 (author dislikes the term);
+no visible "diversity wall"/"the wall"/"structurally identical" remain. Builds clean (0 undefined refs).
+Completes PRD #37 §2 (CovRL) + §3 (Limitations).
+
+## 2026-06-11 — corrected the "narrow teacher" framing: the model UNDER-covers its corpus
+The "corpus inherits its teacher's range" limitation (added earlier today) was wrong and is removed.
+Evidence: buzzer — the generator that produced the SFT corpus — reaches 4,915 unique PCs with 23 valid
+programs (`data/corpus/buzzer_coverage.csv`) against the model's 3,460 with 92 (`model_coverage.csv`); and
+the dataset bytecode, analysed, spans more verifier PCs than the model reproduces (author's analysis). The
+teacher/corpus is therefore the BROADER of the two — the narrowing is introduced by the learned generator
+(a lossy compression of a broad corpus into a narrow sampling distribution), not inherited from a narrow
+source. ch7 Limitations paragraph reframed to "The implicit corpus is lossier than the explicit one". This
+closes the narrow-teacher confound in the model's direction. TODO: cite the exact corpus-union-PC figure
+(vs the model's 3,799 over the 500-program race) in ch6 + FACTS once the author supplies/confirms it.
+
+## 2026-06-11 — RQ2 sharpened to "exceed the corpus"; RL length is compute-bounded, not a plateau
+Reframed RQ2 (ch4) around the real hypothesis: SFT only imitates the corpus; RL draws reward straight from
+the verifier, so a successful loop should let the model EXCEED the coverage of the corpus it was trained on.
+The measurements fix the starting point — the model currently sits BELOW its corpus (under-covers it) — but
+do not answer whether RL can carry it past. Stated honestly that run~2's ~200 steps was a length set by the
+available cloud-GPU (Colab) budget, not by any plateau. ch7 future-work item 1 now names the decisive
+experiment: longer RL → generate at the 20k scale → test whether the RL model reaches MORE unique valid PCs
+than the corpus. Softened ch7 "accounts for" → "is enough to produce" (coupon-collector sufficiency, not
+sole cause). Measured artifacts the thesis rests on, for the record: the dataset/corpus; the buzzer
+generation + coverage race; the benchmarks; the 20k SFT-v2 (1-epoch) saturation sample; the ~5k RL-v2
+(cp200, brief) sample. Builds clean.

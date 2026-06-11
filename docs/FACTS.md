@@ -24,9 +24,13 @@ verifier did its job — it is not a finding.
 Data collection → SFT → RL (GRPO) → coverage evaluation (unique PCs from valid programs)
 ```
 
-**The finding so far: diversity, not validity, is the wall.** Valid programs *saturate* in coverage —
-~16× more valid programs buy only ~+28 % unique PCs (replicate range +9–45 %; the metric is noisy, the
-sub-linearity is robust). Raising validity does not help; the programs cluster onto the same verifier paths.
+**What's measured so far (evidence-only — no mechanism claimed).** SFT-2 is a clear step up from SFT-1:
+trivial 1–2 instruction programs → deep valid programs (median ~30 instr @512 tok). On the coverage metric,
+valid programs *saturate*: ~16× more valid programs buy only ~+28 % unique PCs (replicate range +9–45 %; the
+metric is noisy, the sub-linearity is robust). **This is reported as a measurement, not as "mode collapse"
+or a "diversity wall"** — no clean same-harness baseline was run, so the cause is undetermined. The one
+fully diagnosed-and-fixed finding is GRPO gradient starvation (RL-1, σ_r=0). Don't editorialize the
+saturation into an interpretation the data don't back.
 
 | Axis | Value |
 |---|---|
@@ -49,7 +53,7 @@ can produce**, not by a score.
 |---|---|---|---|---|
 | **SFT-1** | `Status: VALID` + verifier-log assembly | 9,288 (3 ep) | Only **trivial 1–2 instruction programs** — the verifier-log format is ~232 tok/instruction, so the completion budget fit almost nothing. Valid but too short to explore anything. | `checkpoints/curated_3ep/` (merged: `curated_merged/`) |
 | **SFT-2 (partial probe)** | `[coverage][novelty]` + stripped assembly | ~1,500 (0.62 ep) | A local "does it generate bytecode at all" probe. The n=20 "19 %" benchmark. Same work as SFT-2, fewer steps. Not a result. | `checkpoints/sft_retrain/checkpoint-1500/` |
-| **SFT-2** | `[coverage][novelty]` + stripped assembly | ~2,408 (1 ep) | Generates **real, deep** programs (30–58 instructions). **Weakness: low diversity** — valid programs cluster, coverage saturates. This is the diversity-experiment and RL-2 base. | `checkpoints/sft-1epoch-v2/sft_adapter/` |
+| **SFT-2** | `[coverage][novelty]` + stripped assembly | ~2,408 (1 ep) | Generates **real, deep** programs (30–58 instructions) — a clear win over SFT-1. Coverage saturates with sample count (reported as a measurement; no mechanism claimed). This is the saturation-experiment and RL-2 base. | `checkpoints/sft-1epoch-v2/sft_adapter/` |
 | **RL-1** | GRPO over SFT, `Status: VALID` | 8,370 | Did not learn — **reward had zero within-group variance** (`reward_std=0` from step ~1,300) → GRPO gradient starvation. **Value = the insight**, not a number. | `checkpoints/rl_grpo_v2/` (dir says v2, is run 1) |
 | **RL-2** | GRPO over SFT-2, validity-gated novelty reward | ~200 (phase B) | Cleared the RL-1 `std=0` trap (reward/std 0.31) but **did not break the saturation** — RL's valid programs sit *on* the SFT-2 diversity curve. Under-trained + benchmarked out-of-regime. | local `rl_grpo_v3/` empty; `checkpoint-200` on Colab/Drive |
 
