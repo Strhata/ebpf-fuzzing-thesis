@@ -84,3 +84,9 @@ benchmarks/runs/*_run.json
 
 # Exam slide deck (issue #38) — build artifacts, kept local
 slides/
+
+# Local buzzer/QEMU demo cheat-sheet (not part of the build)
+fuzzing/DEMO_buzzer_qemu.txt
+
+# Thesis document is kept local only - not published to GitHub
+thesis/
